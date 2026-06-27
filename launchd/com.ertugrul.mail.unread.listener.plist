@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ertugrul.mail.unread.listener</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/.venv/bin/python</string>
+        <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/telegram_listener.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/logs/listener_output.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/logs/listener_error.log</string>
+</dict>
+</plist>
