@@ -1,25 +1,29 @@
-# Mail Unread Digest
+# macOS Mail Unread Digest
 
-A tool to fetch unread emails from primary inboxes via AppleScript and send a summary digest to Telegram. (Uses an allow-list for primary inbox folders).
+A lightweight automation to fetch unread emails from Apple Mail and send a summary digest to Telegram.
 
-## Installation
-1. Ensure `~/.hermes_local_automation/telegram.env` contains:
-   - `TELEGRAM_BOT_TOKEN=your_token`
-   - `TELEGRAM_CHAT_ID=your_chat_id`
+## Architecture
+- **AppleScript (`mail_fetcher.applescript`)**: Extracts metadata (account, mailbox, sender, subject, date, snippet) for unread messages in the primary Inbox. It outputs raw delimited records to avoid JSON encoding failures caused by control characters or invisible Unicode in email content.
+- **Python (`main.py`)**: 
+  - Executes the AppleScript.
+  - Parses the delimited records.
+  - Sanitizes all fields (removes control chars, zero-width spaces, collapses whitespace).
+  - Groups messages by account and mailbox.
+  - Formats the final digest text (v1: shows sender, date, and subject; excludes snippets for clarity).
+  - Sends the digest via Telegram Bot API.
+
+## Setup
+1. Create the environment file at `~/.hermes_local_automation/telegram.env`:
+   ```env
+   TELEGRAM_BOT_TOKEN=your_bot_token
+   TELEGRAM_CHAT_ID=your_chat_id
+   ```
+2. Ensure Apple Mail is open and has granted permissions to the terminal/script.
 
 ## Usage
-Run the digest manually:
-```bash
-python3 main.py
-```
+- **Run Digest**: `python3 main.py`
+- **Dry Run (Test)**: `python3 main.py --dry-run` (Fetches and prints to stdout without sending)
+- **Listener**: `python3 telegram_listener.py` (Responds to `/mail`, `/unread`, `/status`)
 
-## Telegram Commands
-The listener allows triggering the digest via Telegram:
-- `/mail` or `/unread`: Triggers the unread mail digest.
-- `/status`: Checks if the listener is active.
-
-## Deployment (launchd)
-To run the listener in the background on macOS:
-```bash
-launchctl load ~/Projects/mail_unread_digest/launchd/com.ertugrul.mail.unread.listener.plist
-```
+## Permanent Fix for JSON Failures
+Previously, the AppleScript attempted to generate JSON strings manually. This was fragile when emails contained quotes, backslashes, or invisible control characters. The current version uses a safe delimiter (`__MAIL_DIGEST_FIELD__`) and delegates all sanitization and JSON handling (if any) to Python's robust standard library.

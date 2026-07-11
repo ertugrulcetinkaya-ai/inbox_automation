@@ -4,10 +4,10 @@
 This is a standalone macOS Mail unread digest project. Hermes must read this file first before doing any work in this project.
 
 ## Core Functionality
-|- The project reads unread emails from Apple Mail / macOS Mail.
-|- It includes all configured Mail accounts.
-|- It groups summaries by account/mailbox.
-|- SCOPE: Only summarizes primary inbox mail. Mailboxes must be named exactly "INBOX" or "Inbox". All other folders are excluded.
+- The project reads unread emails from Apple Mail / macOS Mail.
+- It includes all configured Mail accounts.
+- It groups summaries by account/mailbox.
+- SCOPE: Only summarizes primary inbox mail. Mailboxes must be named exactly "INBOX" or "Inbox". All other folders are excluded.
 
 ## Strict Constraints (Read-Only)
 - This project is strictly read-only.
@@ -15,15 +15,20 @@ This is a standalone macOS Mail unread digest project. Hermes must read this fil
 - It must NEVER delete, move, archive, flag, reply, forward, send, label, or create drafts.
 
 ## Version 1 Specifications
-- v1 does not use LLM summarization.
-- v1 only extracts metadata/snippet safely:
-  - account
-  - mailbox
-  - unread count
-  - sender
-  - subject
-  - received date/time
-  - short snippet
+|- v1 does not use LLM summarization.
+|- v1 extracts metadata safely:
+|  - account
+|  - mailbox
+|  - unread count
+|  - sender
+|  - subject
+|  - received date/time
+|  - short snippet (fetched but excluded from Telegram output for clarity)
+
+## Permanent Fix for Control Characters (June 2026)
+- AppleScript no longer emits JSON. It outputs line-based records using a safe delimiter (`__MAIL_DIGEST_FIELD__`).
+- Python (`main.py`) owns all sanitization, parsing, and formatting.
+- Sanitization includes removing ASCII control characters, zero-width spaces, and collapsing whitespace to prevent JSON/Telegram failures.
 
 ## Integration & Infrastructure
 - Telegram sending uses: `~/.hermes_local_automation/telegram.env`

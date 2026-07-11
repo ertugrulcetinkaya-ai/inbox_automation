@@ -4,7 +4,10 @@ import json
 import requests
 import time
 import warnings
+import sys
+import asyncio
 from pathlib import Path
+from datetime import datetime
 
 # Suppress urllib3 NotOpenSSLWarning
 try:
@@ -16,6 +19,12 @@ except ImportError:
 ENV_FILE = Path.home() / ".hermes_local_automation/telegram.env"
 MAIN_SCRIPT = Path("/Users/ertugrulcetinkaya/Projects/mail_unread_digest/main.py")
 LOCK_FILE = Path("/tmp/mail_unread_digest.lock")
+COMPANY_REPORT_ROOT = Path("/Users/ertugrulcetinkaya/Projects/company_reporting_hub")
+if str(COMPANY_REPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(COMPANY_REPORT_ROOT))
+
+from app.company_reports.live_command_router import CompanyReportCommandError, dispatch_company_report_command
+from app.company_reports.portal_browser_worker import PortalBrowserWorker
 
 def load_env():
     env = {}
@@ -35,6 +44,31 @@ def send_message(token, chat_id, text):
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Error sending Telegram message: {e}")
+
+def run_company_report_command(text):
+    try:
+        result = dispatch_company_report_command(text, send=True)
+    except CompanyReportCommandError as exc:
+        return f"Rapor üretilemedi: {str(exc)[:200] or 'unknown error'}"
+    return {"ok": True, "response": result.response, "matched": result.matched}
+
+def run_report_session_status():
+    worker = PortalBrowserWorker.instance()
+    try:
+        ready = asyncio.run(worker.session_ready())
+    except Exception:
+        ready = False
+    return "✅ SYS oturumu aktif." if ready else "⚠️ SYS oturumu yok / MFA gerekiyor."
+
+def run_prepare_report_session():
+    worker = PortalBrowserWorker.instance()
+    try:
+        result = worker.prepare_and_check_session(headed=True)
+        if isinstance(result, dict) and result.get("session_ready"):
+            return "✅ SYS oturumu hazır."
+        return "⚠️ SYS oturumu yok / MFA gerekiyor."
+    except Exception as e:
+        return f"SYS oturumu hazırlanamadi: {str(e)[:200] or 'unknown error'}"
 
 def run_digest():
     if LOCK_FILE.exists():
@@ -82,6 +116,24 @@ def main():
 
                     # Only accept commands from the authorized chat ID
                     if chat_id_msg != str(chat_id):
+                        continue
+
+                    normalized = (text or "").strip().lower().lstrip("/")
+                    if normalized in {"komutlar", "help", "/komutlar", "/help"} or normalized.startswith(("servis", "fatura")):
+                        registry_result = run_company_report_command(text)
+                        if isinstance(registry_result, str):
+                            send_message(token, chat_id, registry_result)
+                        elif isinstance(registry_result, dict) and registry_result.get("response") and normalized in {"komutlar", "help", "/komutlar", "/help"}:
+                            send_message(token, chat_id, registry_result["response"])
+                        continue
+
+                    if normalized in {"session", "/session", "sys_session", "/sys_session"}:
+                        send_message(token, chat_id, run_report_session_status())
+                        continue
+
+                    if normalized in {"session_hazirla", "/session_hazirla"}:
+                        send_message(token, chat_id, "SYS oturumu hazırlanıyor. MFA tamamlayın.")
+                        send_message(token, chat_id, run_prepare_report_session())
                         continue
 
                     if text == "/mail" or text == "/unread":
