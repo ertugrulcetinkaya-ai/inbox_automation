@@ -17,6 +17,7 @@
 ## Meeting behavior
 
 - Preserve the received-date context when interpreting relative phrases such as `bugün` and `yarın`.
+- Classify dotted numeric tokens before extracting dates or times: `HH.MM` must not also become `DD.MM`; ambiguous `DD.MM` values require date context, while explicit-year and structurally day-first values remain dates.
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.
 - Preserve both Turkish-character and ASCII Telegram command aliases.

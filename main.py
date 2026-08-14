@@ -89,6 +89,10 @@ NUMERIC_DATE_RE = re.compile(
     r"(?<!\d)(?P<first>\d{1,2})[./-](?P<second>\d{1,2})"
     r"(?:[./-](?P<year>20\d{2}))?(?!\d)"
 )
+NUMERIC_DOT_TOKEN_RE = re.compile(
+    r"(?<!\d)(?P<first>\d{1,2})\.(?P<second>\d{1,2})"
+    r"(?:\.(?P<year>20\d{2}))?(?!\d)"
+)
 DAY_MONTH_DATE_RE = re.compile(
     rf"(?<!\w)(?P<day>\d{{1,2}})(?:st|nd|rd|th)?[\s,.-]+"
     rf"(?P<month>{MONTH_PATTERN})(?:[\s,.-]+(?P<year>20\d{{2}}))?(?!\w)",
@@ -122,6 +126,11 @@ WEEKDAY_NAMES = {
     "perşembe": 3, "persembe": 3, "cuma": 4, "cumartesi": 5, "pazar": 6,
 }
 WEEKDAY_RE = re.compile(r"\b(" + "|".join(sorted(WEEKDAY_NAMES, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+DATE_CONTEXT_RE = re.compile(
+    r"\b(?:tarih(?:i|inde|ine|li)?|gün(?:ü|ünde)?|gun(?:u|unde)?|date|dated|on)\b",
+    re.IGNORECASE,
+)
+TIME_CONTEXT_RE = re.compile(r"\b(?:saat(?:inde)?|at|time)\b", re.IGNORECASE)
 _DEFAULT_RELATIVE_ANCHOR = object()
 
 def log(message):
@@ -161,6 +170,50 @@ def _safe_date(year, month, day):
         return None
 
 
+def _numeric_dot_token_kind(text, match):
+    """Classify one dotted numeric token before date/time extraction.
+
+    A dotted token must not be independently interpreted as both a date and a
+    time. Tokens with a year are dates. Otherwise, structurally date-like
+    DD.MM tokens are dates unless nearby time wording makes the intent clear;
+    HH.MM tokens are times unless nearby date wording makes the intent clear.
+    Ambiguous tokens default to time because a date requires explicit context.
+    """
+    first = int(match.group("first"))
+    second = int(match.group("second"))
+    if match.group("year"):
+        return "date"
+
+    before = text[max(0, match.start() - 24):match.start()]
+    after = text[match.end():min(len(text), match.end() + 24)]
+    nearby_before = text[max(0, match.start() - 12):match.start()]
+    nearby_after = text[match.end():min(len(text), match.end() + 12)]
+    if TIME_CONTEXT_RE.search(nearby_before) or TIME_CONTEXT_RE.search(nearby_after):
+        return "time"
+    if DATE_CONTEXT_RE.search(before) or DATE_CONTEXT_RE.search(after):
+        return "date"
+
+    # 15.08 is much more plausibly DD.MM than 15:08 in a Turkish date digest.
+    if first > 12 and second <= 12:
+        return "date"
+    # 10.30 must remain HH.MM; treating it as October 30 creates a false date.
+    if first <= 23 and second > 12:
+        return "time"
+    if first > 23:
+        return "date"
+
+    # DD.MM is only a date when date context is present. Without that context,
+    # an ambiguous two-part dotted token is safer as a time candidate.
+    return "time"
+
+
+def _numeric_dot_token_kind_at(text, start):
+    match = NUMERIC_DOT_TOKEN_RE.match(text, start)
+    if match is None:
+        return None
+    return _numeric_dot_token_kind(text, match)
+
+
 def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
     hits = []
 
@@ -194,6 +247,10 @@ def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
         )
 
     for match in NUMERIC_DATE_RE.finditer(text):
+        if "." in match.group(0):
+            numeric_kind = _numeric_dot_token_kind(text, match)
+            if numeric_kind == "time":
+                continue
         first = int(match.group("first"))
         second = int(match.group("second"))
         if first > 12 and second <= 12:
@@ -251,7 +308,10 @@ def parse_received_date(value):
 def _time_hits(text):
     matches = []
     for pattern in (TIME_WITH_COLON_RE, TIME_WITH_DOT_RE, TIME_WITH_AMPM_RE):
-        matches.extend(pattern.finditer(text))
+        for match in pattern.finditer(text):
+            if _numeric_dot_token_kind_at(text, match.start()) == "date":
+                continue
+            matches.append(match)
 
     unique = {}
     for match in matches:

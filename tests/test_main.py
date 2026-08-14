@@ -41,6 +41,71 @@ class MeetingDateContextTests(unittest.TestCase):
         self.assertIn("Gelecek Webinar Toplantısı", digest)
         self.assertNotIn("Satış Sonrası Bilgilendirme Webinarı", digest)
 
+    def test_dotted_time_is_not_also_parsed_as_october_thirtieth(self):
+        record = {
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Bugünkü toplantı",
+            "content": "Toplantımız bugün saat 10.30'da yapılacaktır.",
+        }
+
+        meeting = extract_meeting(record, self.today)
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], self.today)
+        self.assertEqual(meeting["time"], "10:30")
+
+    def test_dotted_time_range_stays_on_the_time_side(self):
+        record = {
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Bugünkü toplantı",
+            "content": "Toplantı bugün 10.30 – 11.30 arasında yapılacaktır.",
+        }
+
+        meeting = extract_meeting(record, self.today)
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], self.today)
+        self.assertEqual(meeting["time"], "10:30–11:30")
+
+    def test_dotted_day_month_is_parsed_as_date(self):
+        record = {
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Ağustos toplantısı",
+            "content": "Toplantı 15.08 tarihinde saat 09.00'da yapılacaktır.",
+        }
+
+        meeting = extract_meeting(record, date(2026, 8, 15))
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], date(2026, 8, 15))
+        self.assertEqual(meeting["time"], "09:00")
+
+    def test_dotted_day_month_with_year_is_parsed_as_date(self):
+        record = {
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Ağustos toplantısı",
+            "content": "Toplantı 15.08.2026 tarihinde saat 09:00'da yapılacaktır.",
+        }
+
+        meeting = extract_meeting(record, date(2026, 8, 15))
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], date(2026, 8, 15))
+        self.assertEqual(meeting["time"], "09:00")
+
+    def test_ambiguous_dotted_number_needs_date_context(self):
+        record = {
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Tarih bilgisi",
+            "content": "Toplantı 10.08 tarihinde saat 09.00'da yapılacaktır.",
+        }
+
+        meeting = extract_meeting(record, date(2026, 8, 10))
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], date(2026, 8, 10))
+        self.assertEqual(meeting["time"], "09:00")
+
 
 if __name__ == "__main__":
     unittest.main()
