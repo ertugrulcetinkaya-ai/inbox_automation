@@ -1,5 +1,4 @@
 import os
-import subprocess
 import requests
 import time
 import warnings
@@ -22,8 +21,6 @@ ENV_FILE = Path(
         str(Path.home() / ".hermes_local_automation/telegram.env"),
     )
 ).expanduser()
-MAIN_SCRIPT = PROJECT_ROOT / "main.py"
-LOCK_FILE = Path("/tmp/inbox_automation.lock")
 COMPANY_REPORT_ROOT = Path(
     os.environ.get(
         "COMPANY_REPORT_ROOT",
@@ -32,6 +29,9 @@ COMPANY_REPORT_ROOT = Path(
 ).expanduser()
 if str(COMPANY_REPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(COMPANY_REPORT_ROOT))
+
+from mail_digest.cli import run_digest as execute_digest
+from mail_digest.services.lock import DigestAlreadyRunning
 
 def load_env():
     env = {}
@@ -85,24 +85,19 @@ def run_prepare_report_session():
         return f"SYS oturumu hazırlanamadi: {str(e)[:200] or 'unknown error'}"
 
 def run_digest(upcoming=False):
-    if LOCK_FILE.exists():
-        return "Digest is already running. Please wait."
-    
     try:
-        LOCK_FILE.touch()
-        # Run the digest with the same interpreter as the listener.
-        command = [sys.executable, str(MAIN_SCRIPT)]
-        if upcoming:
-            command.append("--upcoming")
-        subprocess.run(command, check=True)
-        if upcoming:
-            return "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi."
-        return "Bugünün toplantı özeti Telegram sohbetinize gönderildi."
-    except subprocess.CalledProcessError as e:
-        return f"Error running digest: {e}"
-    finally:
-        if LOCK_FILE.exists():
-            LOCK_FILE.unlink()
+        exit_code = execute_digest(upcoming=upcoming)
+    except DigestAlreadyRunning:
+        return "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin."
+    except Exception as exc:
+        return f"Özet çalıştırılamadı: {str(exc)[:200] or 'bilinmeyen hata'}"
+
+    if exit_code != 0:
+        return f"Özet çalıştırılamadı (çıkış kodu: {exit_code})."
+
+    if upcoming:
+        return "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi."
+    return "Bugünün toplantı özeti Telegram sohbetinize gönderildi."
 
 def main():
     print("Starting Telegram Mail Listener...")

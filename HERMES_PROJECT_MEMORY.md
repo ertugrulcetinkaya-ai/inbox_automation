@@ -45,12 +45,14 @@ This is a standalone inbox automation project backed by macOS Mail. Hermes must 
 - Telegram sending uses: `~/.hermes_local_automation/telegram.env`
 - SECURITY: Do not print or expose the Telegram bot token.
 - `mail_digest/cli.py`: Sends the daily meeting digest; `main.py` delegates to it for launchd compatibility.
+- `mail_digest/services/lock.py`: Owns the shared non-blocking `fcntl.flock()` lock at `/tmp/mail_unread_digest.lock`; both launchd and Telegram command execution must use `mail_digest.cli.run_digest()`.
 - `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, and `/durum`; ASCII aliases remain supported. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
 
 ## Automation (launchd)
 - `launchd/*.plist.template`: Machine-independent launchd templates.
 - `scripts/install_launchd.py`: Renders templates using the current checkout and user paths.
 - The summary agent runs daily at 08:00. The standalone listener is optional and must not share a Telegram bot with Hermes Gateway.
+- The 08:00 launchd invocation and Telegram commands share the same `run_digest()` lock. Do not use `exists()`/`touch()` checks or unlink the lock file; `flock` releases automatically after normal exit, exceptions, and process termination.
 - `logs/`: Contains output and error logs.
 
 ## Operational Rules

@@ -21,6 +21,9 @@ TARGET_EMAIL = "ertugrul@cetinkayalar.com"
 LOCAL_TIMEZONE_NAME = "Europe/Istanbul"
 YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS = 60
 APPLE_SCRIPT_TIMEOUT_SECONDS = 60
+DIGEST_LOCK_FILE = Path(
+    os.environ.get("MAIL_DIGEST_LOCK_FILE", "/tmp/mail_unread_digest.lock")
+).expanduser()
 
 TURKISH_MONTHS = {
     "ocak": 1,
