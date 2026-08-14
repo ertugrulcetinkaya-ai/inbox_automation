@@ -1,6 +1,5 @@
 import os
 import subprocess
-import json
 import requests
 import time
 import warnings
@@ -16,15 +15,23 @@ try:
 except ImportError:
     pass
 
-ENV_FILE = Path.home() / ".hermes_local_automation/telegram.env"
-MAIN_SCRIPT = Path("/Users/ertugrulcetinkaya/Projects/mail_unread_digest/main.py")
+PROJECT_ROOT = Path(__file__).resolve().parent
+ENV_FILE = Path(
+    os.environ.get(
+        "TELEGRAM_ENV_FILE",
+        str(Path.home() / ".hermes_local_automation/telegram.env"),
+    )
+).expanduser()
+MAIN_SCRIPT = PROJECT_ROOT / "main.py"
 LOCK_FILE = Path("/tmp/mail_unread_digest.lock")
-COMPANY_REPORT_ROOT = Path("/Users/ertugrulcetinkaya/Projects/company_reporting_hub")
+COMPANY_REPORT_ROOT = Path(
+    os.environ.get(
+        "COMPANY_REPORT_ROOT",
+        str(Path.home() / "Projects" / "company_reporting_hub"),
+    )
+).expanduser()
 if str(COMPANY_REPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(COMPANY_REPORT_ROOT))
-
-from app.company_reports.live_command_router import CompanyReportCommandError, dispatch_company_report_command
-from app.company_reports.portal_browser_worker import PortalBrowserWorker
 
 def load_env():
     env = {}
@@ -47,22 +54,29 @@ def send_message(token, chat_id, text):
 
 def run_company_report_command(text):
     try:
+        from app.company_reports.live_command_router import CompanyReportCommandError, dispatch_company_report_command
+    except ImportError:
+        return "Rapor servisi bu ortamda hazır değil; toplantı komutları yine kullanılabilir."
+
+    try:
         result = dispatch_company_report_command(text, send=True)
     except CompanyReportCommandError as exc:
         return f"Rapor üretilemedi: {str(exc)[:200] or 'unknown error'}"
     return {"ok": True, "response": result.response, "matched": result.matched}
 
 def run_report_session_status():
-    worker = PortalBrowserWorker.instance()
     try:
+        from app.company_reports.portal_browser_worker import PortalBrowserWorker
+        worker = PortalBrowserWorker.instance()
         ready = asyncio.run(worker.session_ready())
     except Exception:
         ready = False
     return "✅ SYS oturumu aktif." if ready else "⚠️ SYS oturumu yok / MFA gerekiyor."
 
 def run_prepare_report_session():
-    worker = PortalBrowserWorker.instance()
     try:
+        from app.company_reports.portal_browser_worker import PortalBrowserWorker
+        worker = PortalBrowserWorker.instance()
         result = worker.prepare_and_check_session(headed=True)
         if isinstance(result, dict) and result.get("session_ready"):
             return "✅ SYS oturumu hazır."
@@ -76,9 +90,9 @@ def run_digest():
     
     try:
         LOCK_FILE.touch()
-        # Run the main script and capture output if needed, but we just need it to execute
-        subprocess.run(["python3", str(MAIN_SCRIPT)], check=True)
-        return "Unread mail digest has been sent to your chat."
+        # Run the digest with the same interpreter as the listener.
+        subprocess.run([sys.executable, str(MAIN_SCRIPT)], check=True)
+        return "Bugünün toplantı özeti Telegram sohbetinize gönderildi."
     except subprocess.CalledProcessError as e:
         return f"Error running digest: {e}"
     finally:
@@ -136,16 +150,19 @@ def main():
                         send_message(token, chat_id, run_prepare_report_session())
                         continue
 
-                    if text == "/mail" or text == "/unread":
-                        print("Command received: /mail or /unread")
+                    command = (text or "").strip().lower()
+
+                    if command in {"/toplantilar", "/bugun", "/mail", "/unread"}:
+                        print("Command received: /toplantilar or /bugun")
                         result = run_digest()
                         send_message(token, chat_id, result)
-                    elif text == "/status":
-                        print("Command received: /status")
-                        send_message(token, chat_id, "✅ Mail digest listener is running and active.")
+                    elif command in {"/durum", "/status"}:
+                        print("Command received: /durum")
+                        send_message(token, chat_id, "✅ Günlük toplantı özeti listener'ı çalışıyor.")
                     
             except Exception as e:
-                print(f"Polling error: {e}")
+                safe_error = str(e).replace(token, "[REDACTED]")
+                print(f"Polling error: {safe_error}")
                 time.sleep(5)
                 
     except Exception as e:

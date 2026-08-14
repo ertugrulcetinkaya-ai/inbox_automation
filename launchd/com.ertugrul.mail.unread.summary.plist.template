@@ -7,12 +7,12 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/.venv/bin/python</string>
-        <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/main.py</string>
+        <string>__PYTHON_PATH__</string>
+        <string>__PROJECT_ROOT__/main.py</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest</string>
+    <string>__PROJECT_ROOT__</string>
 
     <key>StartCalendarInterval</key>
     <dict>
@@ -23,9 +23,9 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/logs/output.log</string>
+    <string>__PROJECT_ROOT__/logs/output.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/ertugrulcetinkaya/Projects/mail_unread_digest/logs/error.log</string>
+    <string>__PROJECT_ROOT__/logs/error.log</string>
 </dict>
 </plist>
