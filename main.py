@@ -5,6 +5,7 @@ import warnings
 import re
 import argparse
 from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 # Suppress urllib3 NotOpenSSLWarning for launchd logs
@@ -121,6 +122,7 @@ WEEKDAY_NAMES = {
     "perşembe": 3, "persembe": 3, "cuma": 4, "cumartesi": 5, "pazar": 6,
 }
 WEEKDAY_RE = re.compile(r"\b(" + "|".join(sorted(WEEKDAY_NAMES, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+_DEFAULT_RELATIVE_ANCHOR = object()
 
 def log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -159,8 +161,11 @@ def _safe_date(year, month, day):
         return None
 
 
-def _date_hits(text, target_date):
+def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
     hits = []
+
+    if relative_date is _DEFAULT_RELATIVE_ANCHOR:
+        relative_date = target_date
 
     def add_hit(match, year, month, day):
         if year is None:
@@ -201,19 +206,46 @@ def _date_hits(text, target_date):
         add_hit(match, match.group("year"), month, day)
 
     for match in RELATIVE_DATE_RE.finditer(text):
+        if relative_date is None:
+            continue
         word = match.group(1).casefold()
-        relative_date = target_date + timedelta(days=1) if word in {"tomorrow", "yarın"} else target_date
-        hits.append({"date": relative_date, "start": match.start(), "end": match.end()})
+        resolved_date = relative_date + timedelta(days=1) if word in {"tomorrow", "yarın"} else relative_date
+        hits.append({"date": resolved_date, "start": match.start(), "end": match.end()})
 
     for match in WEEKDAY_RE.finditer(text):
+        if relative_date is None:
+            continue
         weekday = WEEKDAY_NAMES[match.group(1).casefold()]
-        if weekday == target_date.weekday():
-            hits.append({"date": target_date, "start": match.start(), "end": match.end()})
+        if weekday == relative_date.weekday():
+            hits.append({"date": relative_date, "start": match.start(), "end": match.end()})
 
     unique = {}
     for hit in hits:
         unique[(hit["date"], hit["start"], hit["end"])] = hit
     return sorted(unique.values(), key=lambda hit: hit["start"])
+
+
+def parse_received_date(value):
+    """Parse the date string emitted by Apple Mail's date as string."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+
+    text = sanitize(value)
+    if not text:
+        return None
+
+    try:
+        parsed = parsedate_to_datetime(text)
+        if parsed is not None:
+            return parsed.date()
+    except (TypeError, ValueError, OverflowError):
+        pass
+
+    fallback = datetime.now().date()
+    explicit_hits = _date_hits(text, fallback, relative_date=None)
+    return explicit_hits[0]["date"] if explicit_hits else None
 
 
 def _time_hits(text):
@@ -290,8 +322,24 @@ def extract_meeting(record, target_date):
     if not _is_meeting_message(subject, content):
         return None
 
+    if "received_date" in record:
+        received_date = record.get("received_date")
+        if not isinstance(received_date, (date, datetime)):
+            received_date = parse_received_date(received_date)
+    elif "date" in record:
+        received_date = parse_received_date(record.get("date"))
+    else:
+        # Preserve helper behavior for synthetic records without transport
+        # metadata; Apple Mail records always carry date.
+        received_date = target_date
+    if isinstance(received_date, datetime):
+        received_date = received_date.date()
+
     text = f"{subject}\n{content}"
-    matching_dates = [hit for hit in _date_hits(text, target_date) if hit["date"] == target_date]
+    matching_dates = [
+        hit for hit in _date_hits(text, target_date, relative_date=received_date)
+        if hit["date"] == target_date
+    ]
     if not matching_dates:
         return None
 
@@ -333,12 +381,14 @@ def fetch_mail():
             
             parts = line.split(FIELD_DELIMITER)
             if len(parts) >= 6:
+                received_text = sanitize(parts[4])
                 records.append({
                     "account": sanitize(parts[0]),
                     "mailbox": sanitize(parts[1]),
                     "sender": sanitize(parts[2]),
                     "subject": sanitize(parts[3]),
-                    "date": sanitize(parts[4]),
+                    "date": received_text,
+                    "received_date": parse_received_date(received_text),
                     "content": sanitize(parts[5]),
                 })
 

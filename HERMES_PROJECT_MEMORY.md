@@ -9,6 +9,7 @@ This is a standalone macOS Mail meeting digest project. Hermes must read this fi
 - SCOPE: Only the primary inbox is included. Mailboxes must be named exactly "INBOX" or "Inbox". All other folders are excluded.
 - Messages received in the last 30 days are inspected; read status does not matter.
 - Likely meeting/calendar messages are parsed for Turkish and English date/time formats.
+- Relative phrases such as "bugün" and "yarın" are anchored to the message received date.
 - The daily output contains meetings scheduled for the current day. If none are found, it sends "Bugün toplantı yok."
 
 ## Strict Constraints (Read-Only)

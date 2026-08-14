@@ -8,6 +8,7 @@ A lightweight macOS automation that scans recent messages for `ertugrul@cetinkay
   - Executes the AppleScript and parses the delimited records.
   - Sanitizes all fields (removes control chars, zero-width spaces, and line breaks).
   - Detects Turkish and English meeting signals and date/time formats.
+  - Resolves relative words such as "bugün" against the message's received date.
   - Lists meetings whose date is today, or sends `Bugün toplantı yok.` when there are none.
   - Sends the digest via Telegram Bot API.
 
