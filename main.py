@@ -316,12 +316,7 @@ def _is_meeting_message(subject, content):
     return any(keyword in haystack for keyword in MEETING_KEYWORDS + CALENDAR_MARKERS)
 
 
-def extract_meeting(record, target_date):
-    subject = record.get("subject", "")
-    content = record.get("content", record.get("snippet", ""))
-    if not _is_meeting_message(subject, content):
-        return None
-
+def _received_date_for_record(record, fallback_date):
     if "received_date" in record:
         received_date = record.get("received_date")
         if not isinstance(received_date, (date, datetime)):
@@ -331,31 +326,51 @@ def extract_meeting(record, target_date):
     else:
         # Preserve helper behavior for synthetic records without transport
         # metadata; Apple Mail records always carry date.
-        received_date = target_date
+        received_date = fallback_date
     if isinstance(received_date, datetime):
         received_date = received_date.date()
+    return received_date
 
-    text = f"{subject}\n{content}"
-    matching_dates = [
-        hit for hit in _date_hits(text, target_date, relative_date=received_date)
-        if hit["date"] == target_date
-    ]
-    if not matching_dates:
-        return None
 
-    candidates = []
-    for date_hit in matching_dates:
-        time_info = _time_for_date(text, date_hit)
-        candidates.append((time_info is None, date_hit["start"], date_hit, time_info))
-
-    _, _, _, time_info = min(candidates, key=lambda item: (item[0], item[1]))
+def _meeting_from_date_hit(record, subject, text, date_hit):
+    time_info = _time_for_date(text, date_hit)
     return {
         "subject": subject or "Başlıksız toplantı",
         "sender": record.get("sender", "") or "Bilinmeyen gönderen",
-        "date": target_date,
+        "date": date_hit["date"],
         "time": time_info["label"] if time_info else "Saat belirtilmemiş",
         "sort_minutes": time_info["minutes"] if time_info else 24 * 60,
+        "_position": date_hit["start"],
     }
+
+
+def extract_meetings(record, start_date, end_date=None):
+    subject = record.get("subject", "")
+    content = record.get("content", record.get("snippet", ""))
+    if not _is_meeting_message(subject, content):
+        return []
+
+    received_date = _received_date_for_record(record, start_date)
+
+    text = f"{subject}\n{content}"
+    matching_dates = [
+        hit
+        for hit in _date_hits(text, start_date, relative_date=received_date)
+        if hit["date"] >= start_date and (end_date is None or hit["date"] <= end_date)
+    ]
+    return [
+        _meeting_from_date_hit(record, subject, text, date_hit)
+        for date_hit in matching_dates
+    ]
+
+
+def extract_meeting(record, target_date):
+    meetings = extract_meetings(record, target_date, target_date)
+    if not meetings:
+        return None
+    meeting = min(meetings, key=lambda item: (item["sort_minutes"], item["_position"]))
+    meeting.pop("_position", None)
+    return meeting
 
 def fetch_mail():
     try:
@@ -430,19 +445,24 @@ def format_date(target_date):
     return f"{target_date.day} {TR_OUTPUT_MONTHS[target_date.month]} {target_date.year}"
 
 
-def format_digest(records, target_date=None):
-    target_date = target_date or datetime.now().date()
+def _collect_meetings(records, start_date, end_date=None):
     meetings = []
     for record in records:
-        meeting = extract_meeting(record, target_date)
-        if meeting:
-            meetings.append(meeting)
+        meetings.extend(extract_meetings(record, start_date, end_date))
 
     unique_meetings = {}
     for meeting in meetings:
         key = (meeting["date"], meeting["time"], meeting["subject"].casefold())
         unique_meetings[key] = meeting
-    meetings = sorted(unique_meetings.values(), key=lambda item: (item["sort_minutes"], item["subject"].casefold()))
+    return sorted(
+        unique_meetings.values(),
+        key=lambda item: (item["date"], item["sort_minutes"], item["subject"].casefold()),
+    )
+
+
+def format_digest(records, target_date=None):
+    target_date = target_date or datetime.now().date()
+    meetings = _collect_meetings(records, target_date, target_date)
 
     date_label = format_date(target_date)
     if not meetings:
@@ -457,9 +477,37 @@ def format_digest(records, target_date=None):
         lines.append("")
     return "\n".join(lines).rstrip()
 
+
+def format_upcoming_digest(records, start_date=None):
+    start_date = start_date or datetime.now().date()
+    meetings = _collect_meetings(records, start_date)
+
+    if not meetings:
+        return "📅 Bugün ve sonraki toplantılar\nBugün veya sonrasında toplantı yok."
+
+    lines = ["📅 Bugün ve sonraki toplantılar", ""]
+    current_date = None
+    for meeting in meetings:
+        if meeting["date"] != current_date:
+            if current_date is not None:
+                lines.append("")
+            lines.append(format_date(meeting["date"]))
+            current_date = meeting["date"]
+        subject = meeting["subject"][:100]
+        sender = meeting["sender"][:80]
+        lines.append(f"• {meeting['time']} — {subject}")
+        lines.append(f"  Gönderen: {sender}")
+    return "\n".join(lines).rstrip()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fetch and format but do not send")
+    parser.add_argument(
+        "--upcoming",
+        action="store_true",
+        help="List meetings scheduled today or later",
+    )
     args = parser.parse_args()
 
     log("START daily meeting digest")
@@ -474,9 +522,14 @@ def main():
     log(f"Processed {len(records)} messages for {TARGET_EMAIL}")
 
     today = datetime.now().date()
-    message = format_digest(records, today)
-    meeting_count = sum(1 for record in records if extract_meeting(record, today))
-    log(f"Found {meeting_count} meetings for {today.isoformat()}")
+    if args.upcoming:
+        message = format_upcoming_digest(records, today)
+        meeting_count = len(_collect_meetings(records, today))
+        log(f"Found {meeting_count} meetings from {today.isoformat()} onward")
+    else:
+        message = format_digest(records, today)
+        meeting_count = len(_collect_meetings(records, today, today))
+        log(f"Found {meeting_count} meetings for {today.isoformat()}")
     
     if args.dry_run:
         log("Dry-run mode: printing digest to stdout")

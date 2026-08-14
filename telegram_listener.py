@@ -84,14 +84,19 @@ def run_prepare_report_session():
     except Exception as e:
         return f"SYS oturumu hazırlanamadi: {str(e)[:200] or 'unknown error'}"
 
-def run_digest():
+def run_digest(upcoming=False):
     if LOCK_FILE.exists():
         return "Digest is already running. Please wait."
     
     try:
         LOCK_FILE.touch()
         # Run the digest with the same interpreter as the listener.
-        subprocess.run([sys.executable, str(MAIN_SCRIPT)], check=True)
+        command = [sys.executable, str(MAIN_SCRIPT)]
+        if upcoming:
+            command.append("--upcoming")
+        subprocess.run(command, check=True)
+        if upcoming:
+            return "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi."
         return "Bugünün toplantı özeti Telegram sohbetinize gönderildi."
     except subprocess.CalledProcessError as e:
         return f"Error running digest: {e}"
@@ -155,6 +160,14 @@ def main():
                     if command in {"/toplantilar", "/bugun", "/mail", "/unread"}:
                         print("Command received: /toplantilar or /bugun")
                         result = run_digest()
+                        send_message(token, chat_id, result)
+                    elif command in {
+                        "/gelecek_toplantilar",
+                        "/toplantilar_gelecek",
+                        "/sonraki_toplantilar",
+                    }:
+                        print("Command received: /gelecek_toplantilar")
+                        result = run_digest(upcoming=True)
                         send_message(token, chat_id, result)
                     elif command in {"/durum", "/status"}:
                         print("Command received: /durum")

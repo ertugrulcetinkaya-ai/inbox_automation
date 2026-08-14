@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-from main import extract_meeting, format_digest, parse_received_date
+from main import extract_meeting, format_digest, format_upcoming_digest, parse_received_date
 
 
 class MeetingDateContextTests(unittest.TestCase):
@@ -28,6 +28,17 @@ class MeetingDateContextTests(unittest.TestCase):
     def test_digest_does_not_list_old_relative_today_message(self):
         digest = format_digest([self.record], self.today)
         self.assertIn("Bugün toplantı yok.", digest)
+        self.assertNotIn("Satış Sonrası Bilgilendirme Webinarı", digest)
+
+    def test_upcoming_digest_includes_future_explicit_date(self):
+        future_record = {
+            **self.record,
+            "subject": "Gelecek Webinar Toplantısı",
+            "content": "15 Ağustos 2026 tarihinde saat 10:00'da yapılacaktır.",
+        }
+        digest = format_upcoming_digest([self.record, future_record], self.today)
+        self.assertIn("15 Ağustos 2026", digest)
+        self.assertIn("Gelecek Webinar Toplantısı", digest)
         self.assertNotIn("Satış Sonrası Bilgilendirme Webinarı", digest)
 
 
