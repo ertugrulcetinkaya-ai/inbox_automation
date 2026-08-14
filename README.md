@@ -9,6 +9,7 @@ Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 günde
 - Türkçe ve İngilizce toplantı ifadelerini, tarihleri ve saatleri algılar.
 - Önce gerçek iCalendar/ICS verisini parse eder; ICS yoksa semantic metin parser'ına düşer.
 - `Bugün` ve `yarın` gibi göreli ifadeleri mesajın alındığı tarihe göre yorumlar.
+- Haftanın günlerini çıplak (`Cuma`) veya `bu/önümüzdeki` ve `this/next` gibi göreli ifadelerle gelecek uygun tarihe çözer.
 - Yıl içermeyen tarihlerde, tarih hedef günden en az 60 gün geçmişse bir sonraki yıl değerlendirilir; örneğin 20 Aralık'ta geçen `5 Ocak`, 5 Ocak 2027 kabul edilir.
 - Her gün saat 08:00'de o gün yapılacak toplantıları Telegram'a gönderir.
 - O gün toplantı yoksa `Bugün toplantı yok.` mesajını gönderir.
@@ -61,6 +62,8 @@ Canonical `Meeting` modeli şu alanları taşır: `uid`, `title`, `organizer`, `
 `STATUS:CANCELLED` veya `METHOD:CANCEL` olan ICS etkinlikleri listeye alınmaz. Aynı `UID` için daha yüksek `SEQUENCE` değerine sahip kayıt geçerli kabul edilir; böylece tarih değişikliği ve iptal mailleri eski daveti bastırır. Semantic metinde `iptal`, `ertelendi/rescheduled` ve `tentative` durumları da sınıflandırılır. `DTSTART;TZID=...`, UTC (`Z`) ve tarih-only ICS değerleri desteklenir; UTC zamanları Telegram özeti için Europe/Istanbul saatine çevrilir.
 
 Yıl belirtilmeyen `5 Ocak` gibi tarihler önce hedef tarihin yılıyla oluşturulur. Bu aday hedef tarihten en az 60 gün gerideyse bir sonraki yıl adayı kullanılır; böylece yıl geçişinde gelecek toplantılar elenmezken, yakın geçmişteki tarihler yanlışlıkla ileri taşınmaz.
+
+Haftanın günü ifadeleri mesajın alındığı tarihe göre çözülür. `Cuma` ve `bu/this Cuma` bir sonraki uygun Cuma’yı, `önümüzdeki/next Friday` ise aynı günse takip eden haftadaki ilk Cuma’yı seçer.
 
 AppleScript JSON üretmez; güvenli `__MAIL_DIGEST_FIELD__` ayırıcısını kullanır. Temizleme ve ayrıştırma Python tarafında yapılır. Böylece e-posta içindeki tırnak, ters bölü ve kontrol karakterleri Telegram çıktısını bozmaz.
 

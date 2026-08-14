@@ -17,6 +17,7 @@
 ## Meeting behavior
 
 - Preserve the received-date context when interpreting relative phrases such as `bugün` and `yarın`.
+- Resolve bare weekdays to the next occurrence from the received date; support `bu/this` and `önümüzdeki/next` prefixes, with the latter requiring a strictly future occurrence when the message arrives on that weekday.
 - Resolve yearless dates in the target year first; if the candidate is at least 60 days in the past, evaluate the same month/day in the following year. This prevents `5 Ocak` on 20 December from becoming a past event while keeping recent past dates in the current year.
 - Classify dotted numeric tokens before extracting dates or times: `HH.MM` must not also become `DD.MM`; ambiguous `DD.MM` values require date context, while explicit-year and structurally day-first values remain dates.
 - Parse inline ICS and MIME `text/calendar`/`.ics` payloads before semantic text fallback. A neutral subject must not hide a valid calendar invitation.

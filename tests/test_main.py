@@ -135,6 +135,50 @@ class MeetingDateContextTests(unittest.TestCase):
 
         self.assertIsNone(meeting)
 
+    def test_bare_weekday_resolves_to_next_occurrence(self):
+        record = {
+            "received_date": date(2026, 8, 12),  # Wednesday
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Cuma toplantısı",
+            "content": "Cuma saat 14:00 görüşelim.",
+        }
+
+        meeting = extract_meeting(record, date(2026, 8, 14))
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], date(2026, 8, 14))
+        self.assertEqual(meeting["time"], "14:00")
+
+    def test_relative_weekday_prefixes_resolve_to_upcoming_date(self):
+        for phrase in ("bu cuma", "önümüzdeki cuma", "this Friday", "next Friday"):
+            with self.subTest(phrase=phrase):
+                record = {
+                    "received_date": date(2026, 8, 12),  # Wednesday
+                    "sender": "Toplantı Organizatörü <meetings@example.com>",
+                    "subject": "Toplantı",
+                    "content": f"{phrase} saat 14:00 görüşelim.",
+                }
+
+                meeting = extract_meeting(record, date(2026, 8, 14))
+
+                self.assertIsNotNone(meeting)
+                self.assertEqual(meeting["date"], date(2026, 8, 14))
+                self.assertEqual(meeting["time"], "14:00")
+
+    def test_next_weekday_prefix_skips_today(self):
+        record = {
+            "received_date": date(2026, 8, 14),  # Friday
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Next Friday toplantısı",
+            "content": "Next Friday saat 14:00 görüşelim.",
+        }
+
+        meeting = extract_meeting(record, date(2026, 8, 21))
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], date(2026, 8, 21))
+        self.assertEqual(meeting["time"], "14:00")
+
 
 class ICSMeetingTests(unittest.TestCase):
     def setUp(self):

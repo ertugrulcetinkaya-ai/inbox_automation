@@ -153,7 +153,12 @@ WEEKDAY_NAMES = {
     "pazartesi": 0, "salı": 1, "sali": 1, "çarşamba": 2, "carsamba": 2,
     "perşembe": 3, "persembe": 3, "cuma": 4, "cumartesi": 5, "pazar": 6,
 }
-WEEKDAY_RE = re.compile(r"\b(" + "|".join(sorted(WEEKDAY_NAMES, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+WEEKDAY_PREFIXES = "bu|this|önümüzdeki|onumuzdeki|gelecek|next"
+WEEKDAY_RE = re.compile(
+    r"(?<!\w)(?:(?P<prefix>" + WEEKDAY_PREFIXES + r")\s+)?"
+    r"(?P<weekday>" + "|".join(sorted(WEEKDAY_NAMES, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
 DATE_CONTEXT_RE = re.compile(
     r"\b(?:tarih(?:i|inde|ine|li)?|gün(?:ü|ünde)?|gun(?:u|unde)?|date|dated|on)\b",
     re.IGNORECASE,
@@ -252,6 +257,19 @@ def _resolve_yearless_date(month, day, target_date):
         if next_candidate is not None:
             return next_candidate
     return current_candidate
+
+
+def _resolve_weekday_date(weekday, relative_date, prefix=""):
+    """Resolve a weekday to the next practical occurrence.
+
+    Bare weekdays and ``bu/this`` use the next occurrence, including today.
+    ``önümüzdeki/next`` requires a strictly future occurrence, so a weekday
+    mentioned on that same weekday resolves to the following week.
+    """
+    days_until = (weekday - relative_date.weekday()) % 7
+    if prefix.casefold() in {"önümüzdeki", "onumuzdeki", "gelecek", "next"} and days_until == 0:
+        days_until = 7
+    return relative_date + timedelta(days=days_until)
 
 
 def _ics_unescape(value):
@@ -674,9 +692,13 @@ def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
     for match in WEEKDAY_RE.finditer(text):
         if relative_date is None:
             continue
-        weekday = WEEKDAY_NAMES[match.group(1).casefold()]
-        if weekday == relative_date.weekday():
-            hits.append({"date": relative_date, "start": match.start(), "end": match.end()})
+        weekday = WEEKDAY_NAMES[match.group("weekday").casefold()]
+        resolved_date = _resolve_weekday_date(
+            weekday,
+            relative_date,
+            match.group("prefix") or "",
+        )
+        hits.append({"date": resolved_date, "start": match.start(), "end": match.end()})
 
     unique = {}
     for hit in hits:
