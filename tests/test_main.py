@@ -112,6 +112,29 @@ class MeetingDateContextTests(unittest.TestCase):
         self.assertEqual(meeting["date"], date(2026, 8, 10))
         self.assertEqual(meeting["time"], "09:00")
 
+    def test_yearless_january_date_rolls_into_next_year(self):
+        record = {
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Ocak toplantısı",
+            "content": "Toplantı 5 Ocak saat 10:00'da yapılacaktır.",
+        }
+
+        digest = format_upcoming_digest([record], date(2026, 12, 20))
+
+        self.assertIn("5 Ocak 2027", digest)
+        self.assertNotIn("5 Ocak 2026", digest)
+
+    def test_recent_yearless_past_date_does_not_roll_into_next_year(self):
+        record = {
+            "sender": "Toplantı Organizatörü <meetings@example.com>",
+            "subject": "Ağustos toplantısı",
+            "content": "Toplantı 5 Ağustos saat 10:00'da yapılacaktır.",
+        }
+
+        meeting = extract_meeting(record, date(2026, 8, 14))
+
+        self.assertIsNone(meeting)
+
 
 class ICSMeetingTests(unittest.TestCase):
     def setUp(self):

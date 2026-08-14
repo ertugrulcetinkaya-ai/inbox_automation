@@ -103,6 +103,7 @@ SEMANTIC_TENTATIVE_RE = re.compile(
 )
 TRANSPORT_NEWLINE_TOKEN = "__MAIL_DIGEST_LINEBREAK__"
 LOCAL_TIMEZONE_NAME = "Europe/Istanbul"
+YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS = 60
 
 TR_OUTPUT_MONTHS = (
     "", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
@@ -230,6 +231,27 @@ def _safe_date(year, month, day):
         return date(year, month, day)
     except ValueError:
         return None
+
+
+def _resolve_yearless_date(month, day, target_date):
+    """Resolve a month/day date relative to the digest target date.
+
+    A yearless date normally belongs to the target year. If that candidate is
+    at least the rollover threshold in the past, prefer the same date in the
+    following year. This handles messages such as "5 Ocak" received on 20
+    December without moving a recent past date such as "5 Ağustos" to next
+    year.
+    """
+    current_candidate = _safe_date(target_date.year, month, day)
+    if current_candidate is None:
+        return _safe_date(target_date.year + 1, month, day)
+
+    days_past = (target_date - current_candidate).days
+    if days_past >= YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS:
+        next_candidate = _safe_date(target_date.year + 1, month, day)
+        if next_candidate is not None:
+            return next_candidate
+    return current_candidate
 
 
 def _ics_unescape(value):
@@ -594,8 +616,9 @@ def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
 
     def add_hit(match, year, month, day):
         if year is None:
-            year = target_date.year
-        parsed = _safe_date(int(year), int(month), int(day))
+            parsed = _resolve_yearless_date(int(month), int(day), target_date)
+        else:
+            parsed = _safe_date(int(year), int(month), int(day))
         if parsed is not None:
             hits.append({"date": parsed, "start": match.start(), "end": match.end()})
 

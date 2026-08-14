@@ -15,6 +15,7 @@ This is a standalone inbox automation project backed by macOS Mail. Hermes must 
 - For the same ICS `UID`, the highest `SEQUENCE` wins. Semantic reschedule messages must keep the new date and discard the old date.
 - AppleScript transport must preserve content line breaks and may carry raw MIME source; do not flatten ICS content before Python parsing.
 - Dotted numeric tokens are classified before extraction: `10.30` and `10.30–11.30` remain times, while `15.08`/`15.08.2026` remain dates; ambiguous `DD.MM` tokens require nearby date context.
+- Yearless dates use the target year first; when that candidate is at least 60 days in the past, the next-year candidate is evaluated. For example, `5 Ocak` on 20 December resolves to 5 January of the following year, while a recent past date stays in the current year.
 - Relative phrases such as "bugün" and "yarın" are anchored to the message received date.
 - The daily output contains meetings scheduled for the current day. If none are found, it sends "Bugün toplantı yok."
 
