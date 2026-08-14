@@ -157,14 +157,17 @@ def main():
 
                     command = (text or "").strip().lower()
 
-                    if command in {"/toplantilar", "/bugun", "/mail", "/unread"}:
+                    if command in {"/toplantilar", "/toplantılar", "/bugun", "/bugün", "/mail", "/unread"}:
                         print("Command received: /toplantilar or /bugun")
                         result = run_digest()
                         send_message(token, chat_id, result)
                     elif command in {
                         "/gelecek_toplantilar",
+                        "/gelecek_toplantılar",
                         "/toplantilar_gelecek",
+                        "/toplantılar_gelecek",
                         "/sonraki_toplantilar",
+                        "/sonraki_toplantılar",
                     }:
                         print("Command received: /gelecek_toplantilar")
                         result = run_digest(upcoming=True)

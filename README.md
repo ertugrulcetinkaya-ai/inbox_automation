@@ -29,7 +29,7 @@ A lightweight macOS automation that scans recent messages for `ertugrul@cetinkay
 - **Run Digest**: `python3 main.py`
 - **Dry Run (Test)**: `python3 main.py --dry-run` (Fetches and prints to stdout without sending)
 - **Upcoming Meetings**: `python3 main.py --upcoming` (Lists today and later meetings)
-- **Listener**: `python3 telegram_listener.py` (Responds to `/toplantilar`, `/gelecek_toplantilar`, `/durum`)
+- **Listener**: `python3 telegram_listener.py` (Responds to `/toplantilar` or `/toplantılar`, `/bugun` or `/bugün`, `/gelecek_toplantilar` or `/gelecek_toplantılar`, `/toplantilar_gelecek` or `/toplantılar_gelecek`, `/sonraki_toplantilar` or `/sonraki_toplantılar`, and `/durum`)
 
 The scheduled 08:00 launchd job calls the same `main.py` flow. Render the launchd plist for the current machine with:
 

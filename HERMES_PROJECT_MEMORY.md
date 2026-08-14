@@ -34,7 +34,7 @@ This is a standalone macOS Mail meeting digest project. Hermes must read this fi
 - Telegram sending uses: `~/.hermes_local_automation/telegram.env`
 - SECURITY: Do not print or expose the Telegram bot token.
 - `main.py`: Sends the daily meeting digest.
-- `telegram_listener.py`: Standalone listener for `/toplantilar`, `/gelecek_toplantilar`, and `/durum`; the old English commands remain aliases. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
+- `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, and `/durum`; ASCII aliases remain supported. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
 
 ## Automation (launchd)
 - `launchd/*.plist.template`: Machine-independent launchd templates.
