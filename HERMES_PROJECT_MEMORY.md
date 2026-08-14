@@ -19,6 +19,8 @@ This is a standalone inbox automation project backed by macOS Mail. Hermes must 
 - Yearless dates use the target year first; when that candidate is at least 60 days in the past, the next-year candidate is evaluated. For example, `5 Ocak` on 20 December resolves to 5 January of the following year, while a recent past date stays in the current year.
 - Relative phrases such as "bugün" and "yarın" are anchored to the message received date.
 - The daily output contains meetings scheduled for the current day. If none are found, it sends "Bugün toplantı yok."
+- `main.py` is a thin backward-compatible facade. The implementation is split under `mail_digest/`: `sources/apple_mail.py`, `parsing/`, `services/meeting_service.py`, `delivery/telegram.py`, and `cli.py`.
+- Parsing layers must not import Telegram delivery or require network credentials; this keeps date/ICS changes independently testable.
 
 ## Strict Constraints (Read-Only)
 - This project is strictly read-only.
@@ -35,13 +37,13 @@ This is a standalone inbox automation project backed by macOS Mail. Hermes must 
 
 ## Permanent Fix for Control Characters (June 2026)
 - AppleScript no longer emits JSON. It outputs line-based records using a safe delimiter (`__MAIL_DIGEST_FIELD__`).
-- Python (`main.py`) owns all sanitization, parsing, and formatting.
+- Python (`mail_digest/`) owns all sanitization, parsing, and formatting; `main.py` remains the compatibility entry point.
 - Sanitization includes removing ASCII control characters, zero-width spaces, and collapsing whitespace to prevent JSON/Telegram failures.
 
 ## Integration & Infrastructure
 - Telegram sending uses: `~/.hermes_local_automation/telegram.env`
 - SECURITY: Do not print or expose the Telegram bot token.
-- `main.py`: Sends the daily meeting digest.
+- `mail_digest/cli.py`: Sends the daily meeting digest; `main.py` delegates to it for launchd compatibility.
 - `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, and `/durum`; ASCII aliases remain supported. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
 
 ## Automation (launchd)

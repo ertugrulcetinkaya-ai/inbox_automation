@@ -35,7 +35,13 @@ Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
 ## Mimari
 
 - `mail_fetcher.applescript`: Apple Mail'den yalnızca hedef hesabın birincil Inbox'ını okur; subject yanında body calendar sinyallerini arar, satır sonlarını korur ve mümkünse ham MIME kaynağını taşır.
-- `main.py`: Önce MIME attachment veya inline `VCALENDAR/VEVENT` bloklarını parse eder. ICS bulunamazsa tarih/saat ve semantic meeting parser'ı fallback olarak çalışır.
+- `main.py`: launchd/Hermes uyumluluğu için ince giriş noktasıdır; mevcut import ve `python main.py` sözleşmesini korur.
+- `mail_digest/config.py`, `models.py`, `utils.py`: makine bağımsız ayarlar, canonical `Meeting` modeli ve ortak temizleme yardımcıları.
+- `mail_digest/sources/apple_mail.py`: AppleScript'i çalıştırır ve Mail transport kayıtlarını parse eder.
+- `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
+- `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
+- `mail_digest/delivery/telegram.py`: yalnızca Telegram gönderim katmanını içerir; parser katmanına bağımlı değildir.
+- `mail_digest/cli.py`: günlük digest CLI akışını yönetir.
 - `telegram_listener.py`: Yalnızca bağımsız kurulumlarda kullanılan Telegram listener'ıdır.
 - `scripts/install_launchd.py`: Makineye göre launchd plist dosyalarını üretir.
 - `HERMES_PROJECT_MEMORY.md`: Hermes için operasyonel proje hafızasıdır.
@@ -56,6 +62,8 @@ canonical Meeting
    ↓
 daily / upcoming Telegram digest
 ```
+
+Kod akışı katmanlıdır: `sources` Mail erişimini, `parsing` toplantı çıkarımını, `services` iş kurallarını, `delivery` Telegram gönderimini ve `cli` çalışma akışını taşır. Böylece tarih/ICS parser değişiklikleri Telegram gönderim koduna dokunmadan test edilebilir.
 
 Canonical `Meeting` modeli şu alanları taşır: `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id` ve `confidence`. ICS toplantıları `confidence=1.0` ile gelir; semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir.
 

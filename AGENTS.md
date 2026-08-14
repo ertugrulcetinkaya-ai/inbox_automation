@@ -5,6 +5,8 @@
 - This repository is the `inbox_automation` project.
 - Read `README.md` and `HERMES_PROJECT_MEMORY.md` before changing automation, Mail access, Telegram routing, or deployment behavior.
 - Keep the project machine-independent. Resolve paths from `__file__` or explicit environment variables; do not hard-code a developer's home directory into application logic.
+- Keep `main.py` as a thin compatibility facade. Put new code in the appropriate `mail_digest` layer: Mail access under `sources`, parsing under `parsing`, aggregation/rendering under `services`, Telegram transport under `delivery`, and process orchestration under `cli`.
+- Keep parser modules independent from Telegram delivery; parser tests must not require network access or Telegram credentials.
 
 ## Mail and privacy rules
 
