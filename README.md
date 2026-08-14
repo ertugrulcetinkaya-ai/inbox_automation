@@ -1,45 +1,76 @@
-# macOS Mail Meeting Digest
+# Inbox Automation
 
-A lightweight macOS automation that scans recent messages for `ertugrul@cetinkayalar.com`, finds meetings scheduled for the current day, and sends the daily list to Telegram.
+`inbox_automation`, `ertugrul@cetinkayalar.com` hesabının Apple Mail gelen kutusunu okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur.
 
-## Architecture
-- **AppleScript (`mail_fetcher.applescript`)**: Reads only the target account's primary Inbox, includes read and unread messages received in the last 30 days, and loads full content only for likely meeting/calendar messages.
-- **Python (`main.py`)**:
-  - Executes the AppleScript and parses the delimited records.
-  - Sanitizes all fields (removes control chars, zero-width spaces, and line breaks).
-  - Detects Turkish and English meeting signals and date/time formats.
-  - Resolves relative words such as "bugün" against the message's received date.
-  - Lists meetings whose date is today, or sends `Bugün toplantı yok.` when there are none.
-  - Sends the digest via Telegram Bot API.
+Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 gündeki mesajları inceler. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
 
-## Setup
-1. Create the environment file at `~/.hermes_local_automation/telegram.env`:
-   ```env
-   TELEGRAM_BOT_TOKEN=your_bot_token
-   TELEGRAM_CHAT_ID=your_chat_id
-   ```
-2. Ensure Apple Mail is open and has granted permissions to the terminal/script.
-3. Install dependencies in the repository-local virtual environment:
-   ```bash
-   python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
-   ```
+## Ne yapar?
 
-## Usage
-- **Run Digest**: `python3 main.py`
-- **Dry Run (Test)**: `python3 main.py --dry-run` (Fetches and prints to stdout without sending)
-- **Upcoming Meetings**: `python3 main.py --upcoming` (Lists today and later meetings)
-- **Listener**: `python3 telegram_listener.py` (Responds to `/toplantilar` or `/toplantılar`, `/bugun` or `/bugün`, `/gelecek_toplantilar` or `/gelecek_toplantılar`, `/toplantilar_gelecek` or `/toplantılar_gelecek`, `/sonraki_toplantilar` or `/sonraki_toplantılar`, and `/durum`)
+- Türkçe ve İngilizce toplantı ifadelerini, tarihleri ve saatleri algılar.
+- `Bugün` ve `yarın` gibi göreli ifadeleri mesajın alındığı tarihe göre yorumlar.
+- Her gün saat 08:00'de o gün yapılacak toplantıları Telegram'a gönderir.
+- O gün toplantı yoksa `Bugün toplantı yok.` mesajını gönderir.
+- Gelecek toplantıları bugünden başlayarak listeleyebilir.
+- LLM kullanmadan, deterministik tarih/saat ayrıştırması yapar.
 
-The scheduled 08:00 launchd job calls the same `main.py` flow. Render the launchd plist for the current machine with:
+## Telegram komutları
+
+Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
+
+| Amaç | Türkçe komutlar | ASCII eşdeğerleri |
+|---|---|---|
+| Bugünün toplantıları | `/bugün`, `/toplantılar` | `/bugun`, `/toplantilar` |
+| Bugün ve sonraki toplantılar | `/gelecek_toplantılar`, `/toplantılar_gelecek`, `/sonraki_toplantılar` | `/gelecek_toplantilar`, `/toplantilar_gelecek`, `/sonraki_toplantilar` |
+| Servis durumu | `/durum` | `/status` |
+
+İleri tarihli listeyi yerel olarak kontrol etmek için:
 
 ```bash
-.venv/bin/python scripts/install_launchd.py --install
+.venv/bin/python main.py --upcoming --dry-run
 ```
 
-Then load only the summary agent when Company Reporting/Hermes owns the Telegram bot. Do not install the standalone listener in that setup; it would create a second Telegram polling process. The listener is available only for standalone deployments with `--include-listener`.
+## Mimari
 
-The code derives its project path from `__file__`. `TELEGRAM_ENV_FILE` can override the default credentials path, and `COMPANY_REPORT_ROOT` can point to a differently located Company Reporting checkout.
+- `mail_fetcher.applescript`: Apple Mail'den yalnızca hedef hesabın birincil Inbox'ını okur.
+- `main.py`: Mesajları temizler, toplantıları ayrıştırır ve günlük/gelecek özetini üretir.
+- `telegram_listener.py`: Yalnızca bağımsız kurulumlarda kullanılan Telegram listener'ıdır.
+- `scripts/install_launchd.py`: Makineye göre launchd plist dosyalarını üretir.
+- `HERMES_PROJECT_MEMORY.md`: Hermes için operasyonel proje hafızasıdır.
+- `AGENTS.md`: Bu projede değişiklik yaparken uyulacak kurallardır.
 
-## Permanent Fix for JSON Failures
-Previously, the AppleScript attempted to generate JSON strings manually. This was fragile when emails contained quotes, backslashes, or invisible control characters. The current version uses a safe delimiter (`__MAIL_DIGEST_FIELD__`) and delegates all sanitization and JSON handling (if any) to Python's robust standard library.
+AppleScript JSON üretmez; güvenli `__MAIL_DIGEST_FIELD__` ayırıcısını kullanır. Temizleme ve ayrıştırma Python tarafında yapılır. Böylece e-posta içindeki tırnak, ters bölü ve kontrol karakterleri Telegram çıktısını bozmaz.
+
+## Kurulum ve yerel kullanım
+
+Telegram bilgileri `~/.hermes_local_automation/telegram.env` dosyasında tutulur:
+
+```env
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python main.py --dry-run
+```
+
+Apple Mail açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası, `COMPANY_REPORT_ROOT` ile Company Reporting checkout yolu değiştirilebilir.
+
+## Çalıştırma modeli
+
+- GitHub `main` dalı kanonik kaynaktır.
+- Mac Studio ve MacBook Pro geliştirme içindir.
+- Mac Mini tek runtime/production makinesidir.
+- Company Reporting/Hermes aynı Telegram botunu yönetirken bağımsız `telegram_listener.py` çalıştırılmaz; ikinci Telegram polling süreci oluşturulmaz.
+- Mac Mini deploy'u `company_reporting_hub/scripts/deploy_mac_mini.sh` ile yapılır.
+
+## Test
+
+```bash
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+.venv/bin/python -m py_compile main.py telegram_listener.py
+git diff --check
+```
+
+Mail erişimi ve Telegram gönderimi salt-okunur operasyon mantığıyla tasarlanmıştır: mesaj silme, taşıma, işaretleme, cevaplama, yönlendirme veya taslak oluşturma yapılmaz.

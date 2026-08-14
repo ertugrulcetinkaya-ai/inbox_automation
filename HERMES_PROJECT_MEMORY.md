@@ -1,7 +1,7 @@
-# Project Memory: macOS Mail Meeting Digest
+# Project Memory: Inbox Automation
 
 ## Overview
-This is a standalone macOS Mail meeting digest project. Hermes must read this file first before doing any work in this project.
+This is a standalone inbox automation project backed by macOS Mail. Hermes must read this file first before doing any work in this project.
 
 ## Core Functionality
 - The project reads recent messages from Apple Mail / macOS Mail.

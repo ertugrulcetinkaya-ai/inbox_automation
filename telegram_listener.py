@@ -23,7 +23,7 @@ ENV_FILE = Path(
     )
 ).expanduser()
 MAIN_SCRIPT = PROJECT_ROOT / "main.py"
-LOCK_FILE = Path("/tmp/mail_unread_digest.lock")
+LOCK_FILE = Path("/tmp/inbox_automation.lock")
 COMPANY_REPORT_ROOT = Path(
     os.environ.get(
         "COMPANY_REPORT_ROOT",
