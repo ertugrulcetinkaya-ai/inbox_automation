@@ -1,0 +1,6 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Wednesday, August 12, 2026 at 09:00:00
+Subject: Bu cuma toplantısı
+Message-ID: <weekday-bu-cuma@example.com>
+
+Bu cuma saat 14:00 görüşelim.

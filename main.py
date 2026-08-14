@@ -7,6 +7,7 @@ allowing parser, source, service, and delivery code to evolve independently.
 
 from mail_digest.config import (
     CALENDAR_MARKERS,
+    APPLE_SCRIPT_TIMEOUT_SECONDS,
     ENGLISH_MONTHS,
     ENV_FILE,
     FIELD_DELIMITER,

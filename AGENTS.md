@@ -44,5 +44,6 @@
 
 - Prefer small, explicit patches and keep unrelated working-tree changes untouched.
 - Add or update tests for parser, command, routing, or deployment changes.
+- Keep parser coverage broad: maintain table-driven date/time/weekday/lifecycle cases, sanitized fixtures under `tests/fixtures/`, duplicate/update regressions, and Mail/Telegram failure-path tests. Fixtures must not contain real personal data or credentials.
 - Run the relevant unit tests, Python compilation, and `git diff --check` before committing.
 - After deployment, verify the Hermes gateway is running, both checkouts are clean and on `main`, and the installed bridge contains the current command set.

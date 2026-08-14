@@ -1,0 +1,6 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Wednesday, August 12, 2026 at 09:00:00
+Subject: Meeting cancellation
+Message-ID: <cancelled-en@example.com>
+
+The meeting on August 15, 2026 at 10:00 AM has been cancelled.

@@ -1,0 +1,8 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Wednesday, August 12, 2026 at 09:00:00
+Subject: Güncel toplantı bilgisi
+Message-ID: <quoted-reply@example.com>
+
+Güncel toplantımız 18 Ağustos 2026 saat 14:00'te yapılacaktır.
+> Eski toplantımız 15 Ağustos 2026 saat 10:00'daydı.
+> Lütfen eski daveti dikkate almayın.

@@ -1,0 +1,6 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Wednesday, August 12, 2026 at 09:00:00
+Subject: Sales meeting
+Message-ID: <reschedule-en@example.com>
+
+The August 15 meeting has been rescheduled to August 18 at 2:00 PM.

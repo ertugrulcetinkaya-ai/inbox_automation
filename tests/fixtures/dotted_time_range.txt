@@ -1,0 +1,6 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Wednesday, August 12, 2026 at 09:00:00
+Subject: Saat aralığı toplantısı
+Message-ID: <dotted-range@example.com>
+
+Toplantı bugün 09.30 – 10.30 arasında yapılacaktır.

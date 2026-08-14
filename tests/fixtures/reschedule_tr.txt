@@ -1,0 +1,6 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Wednesday, August 12, 2026 at 09:00:00
+Subject: Satış toplantısı
+Message-ID: <reschedule-tr@example.com>
+
+15 Ağustos toplantımız 18 Ağustos 14:00'e ertelenmiştir.

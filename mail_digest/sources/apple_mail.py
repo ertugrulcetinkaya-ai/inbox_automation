@@ -2,7 +2,7 @@
 
 import subprocess
 
-from ..config import FIELD_DELIMITER, SCRIPT_PATH, log
+from ..config import APPLE_SCRIPT_TIMEOUT_SECONDS, FIELD_DELIMITER, SCRIPT_PATH, log
 from ..parsing.dates import parse_received_date
 from ..utils import sanitize, sanitize_content, sanitize_transport_field
 
@@ -15,6 +15,7 @@ def fetch_mail():
             capture_output=True,
             text=True,
             check=False,
+            timeout=APPLE_SCRIPT_TIMEOUT_SECONDS,
         )
 
         raw_output = result.stdout + "\n" + result.stderr
@@ -46,6 +47,9 @@ def fetch_mail():
             log(f"AppleScript error: {sanitize(result.stderr)}")
             return None
         return records
+    except subprocess.TimeoutExpired:
+        log("AppleScript timeout while reading Apple Mail")
+        return None
     except Exception as exc:
         log(f"Error fetching mail: {exc}")
         return None

@@ -1,0 +1,6 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Wednesday, August 12, 2026 at 09:00:00
+Subject: US format toplantısı
+Message-ID: <date-us@example.com>
+
+Toplantı 08/15/2026 tarihinde saat 10:00'da yapılacaktır.

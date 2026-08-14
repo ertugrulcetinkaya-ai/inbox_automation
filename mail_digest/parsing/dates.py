@@ -94,13 +94,26 @@ def _numeric_dot_token_kind(text, match):
     if match.group("year"):
         return "date"
 
-    before = text[max(0, match.start() - 24):match.start()]
-    after = text[match.end():min(len(text), match.end() + 24)]
-    nearby_before = text[max(0, match.start() - 12):match.start()]
-    nearby_after = text[match.end():min(len(text), match.end() + 12)]
-    if TIME_CONTEXT_RE.search(nearby_before) or TIME_CONTEXT_RE.search(nearby_after):
+    before_start = max(0, match.start() - 24)
+    after_end = min(len(text), match.end() + 24)
+    nearby_before_start = max(0, match.start() - 12)
+    nearby_after_end = min(len(text), match.end() + 12)
+
+    def has_context(pattern, start, end):
+        return any(
+            start <= context.start() and context.end() <= end
+            for context in pattern.finditer(text)
+        )
+
+    if has_context(DATE_CONTEXT_RE, nearby_before_start, match.start()) or has_context(
+        DATE_CONTEXT_RE, match.end(), nearby_after_end
+    ):
+        return "date"
+    if has_context(TIME_CONTEXT_RE, nearby_before_start, match.start()):
         return "time"
-    if DATE_CONTEXT_RE.search(before) or DATE_CONTEXT_RE.search(after):
+    if has_context(DATE_CONTEXT_RE, before_start, match.start()) or has_context(
+        DATE_CONTEXT_RE, match.end(), after_end
+    ):
         return "date"
     if first > 12 and second <= 12:
         return "date"

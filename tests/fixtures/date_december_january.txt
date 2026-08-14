@@ -1,0 +1,6 @@
+From: Fixture Organizer <organizer@example.com>
+Date: Sunday, December 20, 2026 at 09:00:00
+Subject: Ocak planlama toplantısı
+Message-ID: <date-rollover@example.com>
+
+5 Ocak saat 10:00'da toplantımız yapılacaktır.

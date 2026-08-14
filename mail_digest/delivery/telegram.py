@@ -27,6 +27,14 @@ def send_telegram(message):
             if response.status_code != 200:
                 log(f"Telegram Error (Chunk {index + 1}/{len(chunks)}): {response.status_code}")
                 success = False
+                continue
+            try:
+                response_payload = response.json()
+            except (AttributeError, ValueError):
+                response_payload = None
+            if not isinstance(response_payload, dict) or response_payload.get("ok") is not True:
+                log(f"Telegram Error (Chunk {index + 1}/{len(chunks)}): invalid response")
+                success = False
         except Exception as exc:
             log(f"Network error sending chunk {index + 1}: {exc}")
             success = False

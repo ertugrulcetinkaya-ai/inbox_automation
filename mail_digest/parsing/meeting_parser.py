@@ -17,6 +17,7 @@ from ..models import Meeting
 from .dates import _date_hits, parse_received_date
 from .ics import parse_ics_meetings
 from .times import _time_for_date
+from ..utils import strip_quoted_reply
 
 try:
     from zoneinfo import ZoneInfo
@@ -143,7 +144,8 @@ def _semantic_meeting_from_date_hit(record, subject, text, date_hit, status):
 
 def extract_meetings(record, start_date, end_date=None, include_cancelled=False):
     subject = record.get("subject", "")
-    content = record.get("content", record.get("snippet", ""))
+    raw_content = record.get("content", record.get("snippet", ""))
+    content = strip_quoted_reply(raw_content)
     received_date = _received_date_for_record(record, start_date)
 
     # Calendar data is authoritative and is parsed before subject filtering.

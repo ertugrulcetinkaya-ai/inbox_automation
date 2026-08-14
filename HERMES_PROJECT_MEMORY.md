@@ -21,6 +21,7 @@ This is a standalone inbox automation project backed by macOS Mail. Hermes must 
 - The daily output contains meetings scheduled for the current day. If none are found, it sends "Bugün toplantı yok."
 - `main.py` is a thin backward-compatible facade. The implementation is split under `mail_digest/`: `sources/apple_mail.py`, `parsing/`, `services/meeting_service.py`, `delivery/telegram.py`, and `cli.py`.
 - Parsing layers must not import Telegram delivery or require network credentials; this keeps date/ICS changes independently testable.
+- Tests include a 50-case parser matrix, 20 sanitized fixtures, ICS aggregation regressions, and AppleScript/Telegram failure-path coverage. Do not add real mailbox contents, credentials, or personal identifiers to fixtures.
 
 ## Strict Constraints (Read-Only)
 - This project is strictly read-only.

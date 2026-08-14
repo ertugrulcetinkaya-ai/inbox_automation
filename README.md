@@ -104,8 +104,10 @@ Apple Mail açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGR
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
-.venv/bin/python -m py_compile main.py telegram_listener.py
+.venv/bin/python -m py_compile main.py telegram_listener.py mail_digest/**/*.py tests/*.py
 git diff --check
 ```
+
+Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixture'ları ve dış sistem hata akışlarını içerir. `tests/fixtures/` altında kişisel veri içermeyen 20 örnek bulunur; AppleScript timeout/bozuk çıktı, Telegram HTTP veya `ok:false` cevabı, 10.30/09.30/14.30 saatleri, tarih biçimleri, yıl geçişi, hafta günleri, quoted reply, iptal, erteleme ve çoklu tarih senaryoları test edilir.
 
 Mail erişimi ve Telegram gönderimi salt-okunur operasyon mantığıyla tasarlanmıştır: mesaj silme, taşıma, işaretleme, cevaplama, yönlendirme veya taslak oluşturma yapılmaz.
