@@ -91,6 +91,16 @@ ICS_MARKERS = (
     ".ics", "method:request", "method:publish", "method:cancel",
 )
 JOIN_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+SEMANTIC_CANCELLED_RE = re.compile(
+    r"\b(?:iptal\w*|cancel(?:led|ed|lation)?|canceled)\b", re.IGNORECASE
+)
+SEMANTIC_RESCHEDULED_RE = re.compile(
+    r"(?:ertelen\w*|reschedul\w*|postpon\w*|yeniden\s+planlan\w*)",
+    re.IGNORECASE,
+)
+SEMANTIC_TENTATIVE_RE = re.compile(
+    r"\b(?:tentative|taslak|geçici|beklemede)\b", re.IGNORECASE
+)
 TRANSPORT_NEWLINE_TOKEN = "__MAIL_DIGEST_LINEBREAK__"
 LOCAL_TIMEZONE_NAME = "Europe/Istanbul"
 
@@ -164,6 +174,7 @@ class Meeting:
     location: str = ""
     join_url: str = ""
     status: str = "CONFIRMED"
+    sequence: int = 0
     source_message_id: str = ""
     confidence: float = 0.0
 
@@ -315,10 +326,13 @@ def _ics_event_blocks(text):
     blocks = []
     current = None
     has_ics = False
+    calendar_method = ""
     for line in _unfold_ics_lines(text):
         marker = line.strip().upper()
         if marker == "BEGIN:VCALENDAR":
             has_ics = True
+        elif marker.startswith("METHOD:"):
+            calendar_method = marker.split(":", 1)[1].strip()
         elif marker == "BEGIN:VEVENT":
             has_ics = True
             current = []
@@ -328,10 +342,22 @@ def _ics_event_blocks(text):
             current = None
         elif current is not None:
             current.append(line)
-    return has_ics, blocks
+    return has_ics, calendar_method, blocks
 
 
-def _parse_ics_event(lines, record):
+def _normalize_ics_status(status, calendar_method):
+    status = (status or "").strip().upper()
+    calendar_method = (calendar_method or "").strip().upper()
+    if calendar_method == "CANCEL" or status == "CANCELLED":
+        return "CANCELLED"
+    if status in {"TENTATIVE", "NEEDS-ACTION"}:
+        return "TENTATIVE"
+    if status == "RESCHEDULED":
+        return "RESCHEDULED"
+    return "CONFIRMED"
+
+
+def _parse_ics_event(lines, record, calendar_method=""):
     properties = {}
     for line in lines:
         parsed = _parse_ics_property(line)
@@ -340,22 +366,28 @@ def _parse_ics_event(lines, record):
         name, params, value = parsed
         properties.setdefault(name, []).append((params, value))
 
-    start_params, start_value = _ics_first(properties, "DTSTART")
-    start_at, timezone_name = _parse_ics_datetime(start_value, start_params)
-    if start_at is None:
-        return None
-
-    end_params, end_value = _ics_first(properties, "DTEND")
-    end_at, end_timezone_name = _parse_ics_datetime(end_value, end_params)
-    timezone_name = timezone_name or end_timezone_name
-
     _, summary = _ics_first(properties, "SUMMARY")
     _, uid = _ics_first(properties, "UID")
     organizer_params, organizer_value = _ics_first(properties, "ORGANIZER")
     _, location = _ics_first(properties, "LOCATION")
     _, description = _ics_first(properties, "DESCRIPTION")
     _, status = _ics_first(properties, "STATUS")
+    _, sequence_value = _ics_first(properties, "SEQUENCE")
     _, url_value = _ics_first(properties, "URL")
+    normalized_status = _normalize_ics_status(status, calendar_method)
+
+    start_params, start_value = _ics_first(properties, "DTSTART")
+    start_at, timezone_name = _parse_ics_datetime(start_value, start_params)
+    if start_at is None and normalized_status == "CANCELLED":
+        start_at = record.get("received_date")
+        if not isinstance(start_at, (date, datetime)):
+            start_at = parse_received_date(record.get("date", ""))
+    if start_at is None:
+        return None
+
+    end_params, end_value = _ics_first(properties, "DTEND")
+    end_at, end_timezone_name = _parse_ics_datetime(end_value, end_params)
+    timezone_name = timezone_name or end_timezone_name
 
     organizer = organizer_params.get("CN", "") or organizer_value
     if organizer.casefold().startswith("mailto:"):
@@ -369,6 +401,10 @@ def _parse_ics_event(lines, record):
 
     source_message_id = record.get("source_message_id", "") or record.get("message_id", "")
     uid = uid or f"{source_message_id}:{start_at.isoformat()}"
+    try:
+        sequence = int(sequence_value or 0)
+    except (TypeError, ValueError):
+        sequence = 0
     return Meeting(
         uid=uid,
         title=summary or record.get("subject", "") or "Başlıksız toplantı",
@@ -378,7 +414,8 @@ def _parse_ics_event(lines, record):
         timezone=timezone_name,
         location=location,
         join_url=_extract_join_url(online_values),
-        status=(status or "CONFIRMED").upper(),
+        status=normalized_status,
+        sequence=sequence,
         source_message_id=source_message_id,
         confidence=1.0,
     )
@@ -430,16 +467,27 @@ def parse_ics_meetings(record):
     meetings = []
     seen = set()
     for payload in payloads:
-        _, blocks = _ics_event_blocks(payload)
+        _, calendar_method, blocks = _ics_event_blocks(payload)
         for block in blocks:
-            meeting = _parse_ics_event(block, record)
+            meeting = _parse_ics_event(block, record, calendar_method)
             if meeting is None:
                 continue
             key = (meeting.uid, meeting.start_at, meeting.title.casefold())
-            if key in seen:
-                continue
-            seen.add(key)
-            meetings.append(meeting)
+            existing = next((item for item in meetings if (
+                item.uid, item.start_at, item.title.casefold()
+            ) == key), None)
+            if existing is None:
+                meetings.append(meeting)
+                seen.add(key)
+            elif (
+                meeting.sequence > existing.sequence
+                or (
+                    meeting.sequence == existing.sequence
+                    and meeting.status == "CANCELLED"
+                    and existing.status != "CANCELLED"
+                )
+            ):
+                meetings[meetings.index(existing)] = meeting
     return meetings
 
 
@@ -458,7 +506,7 @@ def _meeting_display_date(meeting):
     return start_at.date() if isinstance(start_at, datetime) else start_at
 
 
-def _meeting_to_digest_record(meeting, position=0):
+def _meeting_to_digest_record(meeting, position=0, date_override=None):
     start_at = _meeting_display_start(meeting)
     end_at = meeting.end_at
     if isinstance(end_at, datetime) and end_at.tzinfo is not None and ZoneInfo is not None:
@@ -479,7 +527,7 @@ def _meeting_to_digest_record(meeting, position=0):
     return {
         "subject": meeting.title,
         "sender": meeting.organizer or "Bilinmeyen gönderen",
-        "date": _meeting_display_date(meeting),
+        "date": _meeting_display_date(meeting) or date_override,
         "time": label,
         "sort_minutes": sort_minutes,
         "uid": meeting.uid,
@@ -487,6 +535,7 @@ def _meeting_to_digest_record(meeting, position=0):
         "location": meeting.location,
         "join_url": meeting.join_url,
         "status": meeting.status,
+        "sequence": meeting.sequence,
         "source_message_id": meeting.source_message_id,
         "confidence": meeting.confidence,
         "_position": position,
@@ -550,10 +599,15 @@ def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
         if parsed is not None:
             hits.append({"date": parsed, "start": match.start(), "end": match.end()})
 
+    def is_time_hour_suffix(match):
+        return re.match(r":\d{2}\b", text[match.end():]) is not None
+
     for match in ISO_DATE_RE.finditer(text):
         add_hit(match, match.group("year"), match.group("month"), match.group("day"))
 
     for match in DAY_MONTH_DATE_RE.finditer(text):
+        if is_time_hour_suffix(match):
+            continue
         add_hit(
             match,
             match.group("year"),
@@ -562,6 +616,8 @@ def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
         )
 
     for match in MONTH_DAY_DATE_RE.finditer(text):
+        if is_time_hour_suffix(match):
+            continue
         add_hit(
             match,
             match.group("year"),
@@ -717,7 +773,28 @@ def _received_date_for_record(record, fallback_date):
     return received_date
 
 
-def _semantic_meeting_from_date_hit(record, subject, text, date_hit):
+def _semantic_status(text):
+    """Infer lifecycle state from human-written cancellation/update language."""
+    if SEMANTIC_RESCHEDULED_RE.search(text):
+        return "RESCHEDULED"
+    if SEMANTIC_CANCELLED_RE.search(text):
+        return "CANCELLED"
+    if SEMANTIC_TENTATIVE_RE.search(text):
+        return "TENTATIVE"
+    return "CONFIRMED"
+
+
+def _semantic_date_hits_for_status(text, date_hits, status):
+    if status == "CANCELLED":
+        return []
+    if status == "RESCHEDULED" and len(date_hits) > 1:
+        # In Turkish/English reschedule notices the new date is normally the
+        # last date mentioned: "15 Ağustos ... 18 Ağustos'a ertelendi".
+        return [date_hits[-1]]
+    return date_hits
+
+
+def _semantic_meeting_from_date_hit(record, subject, text, date_hit, status):
     time_info = _time_for_date(text, date_hit)
     start_at = date_hit["date"]
     end_at = None
@@ -739,42 +816,74 @@ def _semantic_meeting_from_date_hit(record, subject, text, date_hit):
         organizer=record.get("sender", "") or "Bilinmeyen gönderen",
         start_at=start_at,
         end_at=end_at,
+        status=status,
         source_message_id=record.get("source_message_id", "") or record.get("message_id", ""),
-        confidence=0.55,
+        confidence=0.70 if status == "RESCHEDULED" else 0.55,
     )
 
 
-def extract_meetings(record, start_date, end_date=None):
+def extract_meetings(record, start_date, end_date=None, include_cancelled=False):
     subject = record.get("subject", "")
     content = record.get("content", record.get("snippet", ""))
+    received_date = _received_date_for_record(record, start_date)
 
     # Calendar data is authoritative. Do this before subject/keyword filtering
     # so an invitation with a neutral subject is still recognized.
     ics_meetings = parse_ics_meetings(record)
     if ics_meetings is not None:
-        return [
-            _meeting_to_digest_record(meeting, position=index)
-            for index, meeting in enumerate(ics_meetings)
-            if meeting.status != "CANCELLED"
-            and _meeting_display_date(meeting) >= start_date
-            and (end_date is None or _meeting_display_date(meeting) <= end_date)
-        ]
+        digest_records = []
+        for index, meeting in enumerate(ics_meetings):
+            meeting_date = _meeting_display_date(meeting)
+            if meeting.status == "CANCELLED":
+                if include_cancelled:
+                    digest_records.append(
+                        _meeting_to_digest_record(
+                            meeting,
+                            position=index,
+                            date_override=received_date,
+                        )
+                    )
+                continue
+            if meeting_date is None or meeting_date < start_date:
+                continue
+            if end_date is not None and meeting_date > end_date:
+                continue
+            digest_records.append(_meeting_to_digest_record(meeting, position=index))
+        return digest_records
 
     if not _is_meeting_message(subject, content):
         return []
 
-    received_date = _received_date_for_record(record, start_date)
-
     text = f"{subject}\n{content}"
+    status = _semantic_status(text)
+    date_hits = _date_hits(text, start_date, relative_date=received_date)
     matching_dates = [
         hit
-        for hit in _date_hits(text, start_date, relative_date=received_date)
+        for hit in _semantic_date_hits_for_status(text, date_hits, status)
         if hit["date"] >= start_date and (end_date is None or hit["date"] <= end_date)
     ]
+    if status == "CANCELLED" and include_cancelled and not matching_dates:
+        if date_hits:
+            matching_dates = [date_hits[0]]
+        else:
+            return [
+                _meeting_to_digest_record(
+                    Meeting(
+                        title=subject or "Başlıksız toplantı",
+                        organizer=record.get("sender", "") or "Bilinmeyen gönderen",
+                        start_at=received_date or start_date,
+                        status="CANCELLED",
+                        source_message_id=record.get("source_message_id", ""),
+                        confidence=0.70,
+                    ),
+                    date_override=received_date or start_date,
+                )
+            ]
     return [
         _meeting_to_digest_record(
-            _semantic_meeting_from_date_hit(record, subject, text, date_hit),
+            _semantic_meeting_from_date_hit(record, subject, text, date_hit, status),
             position=date_hit["start"],
+            date_override=received_date,
         )
         for date_hit in matching_dates
     ]
@@ -863,17 +972,80 @@ def format_date(target_date):
     return f"{target_date.day} {TR_OUTPUT_MONTHS[target_date.month]} {target_date.year}"
 
 
+def _status_label(status):
+    return {
+        "RESCHEDULED": "Ertelendi",
+        "TENTATIVE": "Kesinleşmedi",
+    }.get(status, "")
+
+
 def _collect_meetings(records, start_date, end_date=None):
     meetings = []
     for record in records:
-        meetings.extend(extract_meetings(record, start_date, end_date))
+        meetings.extend(
+            extract_meetings(
+                record,
+                start_date,
+                end_date,
+                include_cancelled=True,
+            )
+        )
+
+    status_priority = {
+        "CONFIRMED": 0,
+        "TENTATIVE": 1,
+        "RESCHEDULED": 2,
+        "CANCELLED": 3,
+    }
+
+    def subject_key(meeting):
+        return re.sub(r"\W+", " ", meeting["subject"].casefold()).strip()
+
+    def should_replace(current, candidate):
+        if candidate.get("sequence", 0) != current.get("sequence", 0):
+            return candidate.get("sequence", 0) > current.get("sequence", 0)
+        return status_priority.get(candidate.get("status"), 0) >= status_priority.get(
+            current.get("status"), 0
+        )
+
+    latest_by_uid = {}
+    without_uid = []
+    for meeting in meetings:
+        uid = meeting.get("uid", "")
+        if not uid:
+            without_uid.append(meeting)
+            continue
+        current = latest_by_uid.get(uid)
+        if current is None or should_replace(current, meeting):
+            latest_by_uid[uid] = meeting
+
+    resolved = list(latest_by_uid.values()) + without_uid
+    cancelled_subjects = {
+        subject_key(meeting)
+        for meeting in resolved
+        if meeting.get("status") == "CANCELLED"
+    }
+    rescheduled_subjects = {
+        subject_key(meeting)
+        for meeting in resolved
+        if meeting.get("status") == "RESCHEDULED"
+    }
 
     unique_meetings = {}
-    for meeting in meetings:
+    for meeting in resolved:
+        status = meeting.get("status", "CONFIRMED")
+        if status == "CANCELLED":
+            continue
+        normalized_subject = subject_key(meeting)
+        if status in {"CONFIRMED", "TENTATIVE"} and (
+            normalized_subject in cancelled_subjects
+            or normalized_subject in rescheduled_subjects
+        ):
+            continue
         key = (
             meeting.get("uid") or meeting["date"],
             meeting["time"],
-            meeting["subject"].casefold(),
+            normalized_subject,
         )
         unique_meetings[key] = meeting
     return sorted(
@@ -894,7 +1066,9 @@ def format_digest(records, target_date=None):
     for meeting in meetings:
         subject = meeting["subject"][:100]
         sender = meeting["sender"][:80]
-        lines.append(f"• {meeting['time']} — {subject}")
+        status_label = _status_label(meeting.get("status", "CONFIRMED"))
+        status_suffix = f" [{status_label}]" if status_label else ""
+        lines.append(f"• {meeting['time']} — {subject}{status_suffix}")
         lines.append(f"  Gönderen: {sender}")
         if meeting.get("location"):
             lines.append(f"  Yer: {meeting['location'][:160]}")
@@ -921,7 +1095,9 @@ def format_upcoming_digest(records, start_date=None):
             current_date = meeting["date"]
         subject = meeting["subject"][:100]
         sender = meeting["sender"][:80]
-        lines.append(f"• {meeting['time']} — {subject}")
+        status_label = _status_label(meeting.get("status", "CONFIRMED"))
+        status_suffix = f" [{status_label}]" if status_label else ""
+        lines.append(f"• {meeting['time']} — {subject}{status_suffix}")
         lines.append(f"  Gönderen: {sender}")
         if meeting.get("location"):
             lines.append(f"  Yer: {meeting['location'][:160]}")

@@ -19,6 +19,8 @@
 - Preserve the received-date context when interpreting relative phrases such as `bugün` and `yarın`.
 - Classify dotted numeric tokens before extracting dates or times: `HH.MM` must not also become `DD.MM`; ambiguous `DD.MM` values require date context, while explicit-year and structurally day-first values remain dates.
 - Parse inline ICS and MIME `text/calendar`/`.ics` payloads before semantic text fallback. A neutral subject must not hide a valid calendar invitation.
+- Normalize lifecycle state to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; never list cancelled events, and never leave the old date of a rescheduled event active.
+- For repeated ICS events, resolve by `UID` and highest `SEQUENCE`; `METHOD:CANCEL` takes precedence at equal sequence.
 - Preserve ICS line folding and MIME source in the AppleScript/Python transport; never collapse calendar content into one whitespace-normalized line.
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.

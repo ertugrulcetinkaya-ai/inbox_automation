@@ -11,6 +11,8 @@ This is a standalone inbox automation project backed by macOS Mail. Hermes must 
 - Likely meeting/calendar messages are parsed for Turkish and English date/time formats.
 - ICS-first parsing is mandatory: parse inline `VCALENDAR/VEVENT` and MIME `text/calendar`/`.ics` parts before semantic text fallback.
 - The canonical `Meeting` fields are `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id`, and `confidence`.
+- Meeting status is normalized to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; `STATUS:CANCELLED` and `METHOD:CANCEL` must suppress the event.
+- For the same ICS `UID`, the highest `SEQUENCE` wins. Semantic reschedule messages must keep the new date and discard the old date.
 - AppleScript transport must preserve content line breaks and may carry raw MIME source; do not flatten ICS content before Python parsing.
 - Dotted numeric tokens are classified before extraction: `10.30` and `10.30–11.30` remain times, while `15.08`/`15.08.2026` remain dates; ambiguous `DD.MM` tokens require nearby date context.
 - Relative phrases such as "bugün" and "yarın" are anchored to the message received date.
