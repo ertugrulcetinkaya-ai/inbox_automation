@@ -9,6 +9,9 @@ This is a standalone inbox automation project backed by macOS Mail. Hermes must 
 - SCOPE: Only the primary inbox is included. Mailboxes must be named exactly "INBOX" or "Inbox". All other folders are excluded.
 - Messages received in the last 30 days are inspected; read status does not matter.
 - Likely meeting/calendar messages are parsed for Turkish and English date/time formats.
+- ICS-first parsing is mandatory: parse inline `VCALENDAR/VEVENT` and MIME `text/calendar`/`.ics` parts before semantic text fallback.
+- The canonical `Meeting` fields are `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id`, and `confidence`.
+- AppleScript transport must preserve content line breaks and may carry raw MIME source; do not flatten ICS content before Python parsing.
 - Dotted numeric tokens are classified before extraction: `10.30` and `10.30–11.30` remain times, while `15.08`/`15.08.2026` remain dates; ambiguous `DD.MM` tokens require nearby date context.
 - Relative phrases such as "bugün" and "yarın" are anchored to the message received date.
 - The daily output contains meetings scheduled for the current day. If none are found, it sends "Bugün toplantı yok."

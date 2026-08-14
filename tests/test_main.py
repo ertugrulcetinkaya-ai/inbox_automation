@@ -1,7 +1,13 @@
 import unittest
 from datetime import date
 
-from main import extract_meeting, format_digest, format_upcoming_digest, parse_received_date
+from main import (
+    extract_meeting,
+    format_digest,
+    format_upcoming_digest,
+    parse_ics_meetings,
+    parse_received_date,
+)
 
 
 class MeetingDateContextTests(unittest.TestCase):
@@ -105,6 +111,106 @@ class MeetingDateContextTests(unittest.TestCase):
         self.assertIsNotNone(meeting)
         self.assertEqual(meeting["date"], date(2026, 8, 10))
         self.assertEqual(meeting["time"], "09:00")
+
+
+class ICSMeetingTests(unittest.TestCase):
+    def setUp(self):
+        self.record = {
+            "source_message_id": "<calendar-123@example.com>",
+            "sender": "Calendar Service <calendar@example.com>",
+            "subject": "Ford Otosan Satış Sonrası Ağustos Değerlendirmesi",
+            "content": (
+                "BEGIN:VCALENDAR\n"
+                "VERSION:2.0\n"
+                "BEGIN:VEVENT\n"
+                "UID:ics-123@example.com\n"
+                "DTSTART;TZID=Europe/Istanbul:20260815T100000\n"
+                "DTEND;TZID=Europe/Istanbul:20260815T103000\n"
+                "SUMMARY:Ford Otosan Satış Sonrası Ağustos \n"
+                " Değerlendirmesi\n"
+                "ORGANIZER;CN=Satış Sonrası Ekibi:mailto:after-sales@example.com\n"
+                "LOCATION:Toplantı Odası A\n"
+                "DESCRIPTION:Microsoft Teams toplantısına katılın\\n"
+                " https://teams.microsoft.com/l/meetup-join/abc123\n"
+                "STATUS:CONFIRMED\n"
+                "END:VEVENT\n"
+                "END:VCALENDAR\n"
+            ),
+        }
+
+    def test_ics_is_parsed_before_subject_semantics(self):
+        meeting = extract_meeting(self.record, date(2026, 8, 15))
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["uid"], "ics-123@example.com")
+        self.assertEqual(meeting["subject"], "Ford Otosan Satış Sonrası Ağustos Değerlendirmesi")
+        self.assertEqual(meeting["sender"], "Satış Sonrası Ekibi")
+        self.assertEqual(meeting["date"], date(2026, 8, 15))
+        self.assertEqual(meeting["time"], "10:00–10:30")
+        self.assertEqual(meeting["location"], "Toplantı Odası A")
+        self.assertEqual(meeting["join_url"], "https://teams.microsoft.com/l/meetup-join/abc123")
+        self.assertEqual(meeting["confidence"], 1.0)
+
+    def test_mime_ics_attachment_is_parsed_from_raw_source(self):
+        raw_source = (
+            "Content-Type: multipart/mixed; boundary=cal-boundary\n"
+            "\n"
+            "--cal-boundary\n"
+            "Content-Type: text/plain; charset=utf-8\n"
+            "\n"
+            "Toplantı davetiyesi\n"
+            "--cal-boundary\n"
+            "Content-Type: text/calendar; charset=utf-8; method=REQUEST\n"
+            "Content-Disposition: attachment; filename=invite.ics\n"
+            "\n"
+            "BEGIN:VCALENDAR\n"
+            "BEGIN:VEVENT\n"
+            "UID:attachment-123@example.com\n"
+            "DTSTART:20260816T070000Z\n"
+            "SUMMARY:Ekli Takvim Daveti\n"
+            "END:VEVENT\n"
+            "END:VCALENDAR\n"
+            "--cal-boundary--\n"
+        )
+        record = {
+            "source_message_id": "<raw-123@example.com>",
+            "sender": "Calendar Service <calendar@example.com>",
+            "subject": "Ford Otosan Satış Sonrası Ağustos Değerlendirmesi",
+            "content": "Toplantı davetiyesi",
+            "raw_source": raw_source,
+        }
+
+        meetings = parse_ics_meetings(record)
+
+        self.assertIsNotNone(meetings)
+        self.assertEqual(len(meetings), 1)
+        self.assertEqual(meetings[0].uid, "attachment-123@example.com")
+        self.assertEqual(meetings[0].start_at.date(), date(2026, 8, 16))
+
+    def test_cancelled_ics_event_is_not_returned(self):
+        record = {
+            **self.record,
+            "content": self.record["content"].replace("STATUS:CONFIRMED", "STATUS:CANCELLED"),
+        }
+
+        self.assertIsNone(extract_meeting(record, date(2026, 8, 15)))
+
+    def test_semantic_fallback_can_use_body_when_subject_is_neutral(self):
+        record = {
+            "sender": "Satış Sonrası Ekibi <after-sales@example.com>",
+            "subject": "Ford Otosan Satış Sonrası Ağustos Değerlendirmesi",
+            "content": (
+                "Microsoft Teams toplantısına katılın. "
+                "15 Ağustos 2026 saat 10:00'da görüşeceğiz."
+            ),
+        }
+
+        meeting = extract_meeting(record, date(2026, 8, 15))
+
+        self.assertIsNotNone(meeting)
+        self.assertEqual(meeting["date"], date(2026, 8, 15))
+        self.assertEqual(meeting["time"], "10:00")
+        self.assertEqual(meeting["confidence"], 0.55)
 
 
 if __name__ == "__main__":

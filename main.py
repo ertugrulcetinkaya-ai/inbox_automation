@@ -4,9 +4,18 @@ import requests
 import warnings
 import re
 import argparse
-from datetime import date, datetime, timedelta
+import html
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, time as datetime_time, timezone as dt_timezone
 from email.utils import parsedate_to_datetime
+from email import policy
+from email.parser import Parser
 from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python 3.9+ provides zoneinfo
+    ZoneInfo = None
 
 # Suppress urllib3 NotOpenSSLWarning for launchd logs
 try:
@@ -77,6 +86,14 @@ CALENDAR_MARKERS = (
     "join us", ".ics", "icalendar", "add to calendar", "takvime ekle",
 )
 
+ICS_MARKERS = (
+    "begin:vcalendar", "begin:vevent", "text/calendar", "content-type: text/calendar",
+    ".ics", "method:request", "method:publish", "method:cancel",
+)
+JOIN_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+TRANSPORT_NEWLINE_TOKEN = "__MAIL_DIGEST_LINEBREAK__"
+LOCAL_TIMEZONE_NAME = "Europe/Istanbul"
+
 TR_OUTPUT_MONTHS = (
     "", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
     "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
@@ -133,6 +150,23 @@ DATE_CONTEXT_RE = re.compile(
 TIME_CONTEXT_RE = re.compile(r"\b(?:saat(?:inde)?|at|time)\b", re.IGNORECASE)
 _DEFAULT_RELATIVE_ANCHOR = object()
 
+
+@dataclass(frozen=True)
+class Meeting:
+    """Canonical meeting model shared by ICS and semantic fallback parsing."""
+
+    uid: str = ""
+    title: str = ""
+    organizer: str = ""
+    start_at: object = None
+    end_at: object = None
+    timezone: str = ""
+    location: str = ""
+    join_url: str = ""
+    status: str = "CONFIRMED"
+    source_message_id: str = ""
+    confidence: float = 0.0
+
 def log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}", flush=True)
@@ -163,11 +197,300 @@ def sanitize(text):
     return text
 
 
+def restore_transport_newlines(text):
+    return (text or "").replace(TRANSPORT_NEWLINE_TOKEN, "\n")
+
+
+def sanitize_transport_field(text):
+    return sanitize(restore_transport_newlines(text))
+
+
+def sanitize_content(text):
+    """Clean Mail content while preserving line structure required by ICS."""
+    text = restore_transport_newlines(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "".join(ch for ch in text if ord(ch) >= 32 or ch in "\n\t")
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
+    return text.strip()
+
+
 def _safe_date(year, month, day):
     try:
         return date(year, month, day)
     except ValueError:
         return None
+
+
+def _ics_unescape(value):
+    value = html.unescape(value or "")
+    value = value.replace("\\N", "\n").replace("\\n", "\n")
+    value = value.replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\")
+    return value.strip()
+
+
+def _unfold_ics_lines(text):
+    lines = []
+    for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if line.startswith((" ", "\t")) and lines:
+            lines[-1] += line[1:]
+        else:
+            lines.append(line)
+    return lines
+
+
+def _parse_ics_property(line):
+    if ":" not in line:
+        return None
+    name_and_params, value = line.split(":", 1)
+    parts = name_and_params.split(";")
+    name = parts[0].strip().upper()
+    params = {}
+    for part in parts[1:]:
+        if "=" not in part:
+            continue
+        key, param_value = part.split("=", 1)
+        params[key.strip().upper()] = param_value.strip().strip('"')
+    return name, params, _ics_unescape(value)
+
+
+def _parse_ics_datetime(value, params):
+    value = (value or "").strip()
+    if not value:
+        return None, ""
+
+    timezone_name = params.get("TZID", "").strip().strip('"')
+    value_type = params.get("VALUE", "").upper()
+    if value_type == "DATE" or re.fullmatch(r"\d{8}", value):
+        try:
+            return datetime.strptime(value[:8], "%Y%m%d").date(), timezone_name
+        except ValueError:
+            return None, timezone_name
+
+    is_utc = value.endswith("Z")
+    if is_utc:
+        value = value[:-1]
+        timezone_name = timezone_name or "UTC"
+
+    parsed = None
+    for pattern in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M"):
+        try:
+            parsed = datetime.strptime(value, pattern)
+            break
+        except ValueError:
+            continue
+    if parsed is None:
+        return None, timezone_name
+
+    if is_utc:
+        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+    elif timezone_name and ZoneInfo is not None:
+        try:
+            parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
+        except Exception:
+            pass
+    return parsed, timezone_name
+
+
+def _ics_first(properties, name):
+    values = properties.get(name.upper(), [])
+    return values[0] if values else ({}, "")
+
+
+def _extract_join_url(values):
+    urls = []
+    for value in values:
+        urls.extend(JOIN_URL_RE.findall(value or ""))
+    cleaned = [url.rstrip(".,;:)]}") for url in urls]
+    preferred_domains = (
+        "teams.microsoft.com", "teams.live.com", "zoom.us", "webex.com",
+        "meet.google.com",
+    )
+    for url in cleaned:
+        if any(domain in url.casefold() for domain in preferred_domains):
+            return url
+    return cleaned[0] if cleaned else ""
+
+
+def _ics_event_blocks(text):
+    blocks = []
+    current = None
+    has_ics = False
+    for line in _unfold_ics_lines(text):
+        marker = line.strip().upper()
+        if marker == "BEGIN:VCALENDAR":
+            has_ics = True
+        elif marker == "BEGIN:VEVENT":
+            has_ics = True
+            current = []
+        elif marker == "END:VEVENT":
+            if current is not None:
+                blocks.append(current)
+            current = None
+        elif current is not None:
+            current.append(line)
+    return has_ics, blocks
+
+
+def _parse_ics_event(lines, record):
+    properties = {}
+    for line in lines:
+        parsed = _parse_ics_property(line)
+        if parsed is None:
+            continue
+        name, params, value = parsed
+        properties.setdefault(name, []).append((params, value))
+
+    start_params, start_value = _ics_first(properties, "DTSTART")
+    start_at, timezone_name = _parse_ics_datetime(start_value, start_params)
+    if start_at is None:
+        return None
+
+    end_params, end_value = _ics_first(properties, "DTEND")
+    end_at, end_timezone_name = _parse_ics_datetime(end_value, end_params)
+    timezone_name = timezone_name or end_timezone_name
+
+    _, summary = _ics_first(properties, "SUMMARY")
+    _, uid = _ics_first(properties, "UID")
+    organizer_params, organizer_value = _ics_first(properties, "ORGANIZER")
+    _, location = _ics_first(properties, "LOCATION")
+    _, description = _ics_first(properties, "DESCRIPTION")
+    _, status = _ics_first(properties, "STATUS")
+    _, url_value = _ics_first(properties, "URL")
+
+    organizer = organizer_params.get("CN", "") or organizer_value
+    if organizer.casefold().startswith("mailto:"):
+        organizer = organizer[7:]
+    organizer = organizer or record.get("sender", "") or "Bilinmeyen gönderen"
+
+    online_values = [description, location, url_value]
+    for property_name, values in properties.items():
+        if "URL" in property_name or property_name.startswith("X-MICROSOFT"):
+            online_values.extend(value for _, value in values)
+
+    source_message_id = record.get("source_message_id", "") or record.get("message_id", "")
+    uid = uid or f"{source_message_id}:{start_at.isoformat()}"
+    return Meeting(
+        uid=uid,
+        title=summary or record.get("subject", "") or "Başlıksız toplantı",
+        organizer=organizer,
+        start_at=start_at,
+        end_at=end_at,
+        timezone=timezone_name,
+        location=location,
+        join_url=_extract_join_url(online_values),
+        status=(status or "CONFIRMED").upper(),
+        source_message_id=source_message_id,
+        confidence=1.0,
+    )
+
+
+def _ics_payloads_from_record(record):
+    payloads = []
+    detected = False
+    content = record.get("content", "") or ""
+    raw_source = record.get("raw_source", "") or ""
+
+    if any(marker in content.casefold() for marker in ICS_MARKERS):
+        detected = True
+        payloads.append(content)
+
+    if raw_source:
+        raw_lower = raw_source.casefold()
+        if any(marker in raw_lower for marker in ICS_MARKERS):
+            detected = True
+            payloads.append(raw_source)
+        try:
+            message = Parser(policy=policy.default).parsestr(raw_source)
+            for part in message.walk():
+                content_type = (part.get_content_type() or "").casefold()
+                filename = (part.get_filename() or "").casefold()
+                if content_type != "text/calendar" and not filename.endswith(".ics"):
+                    continue
+                detected = True
+                payload = part.get_payload(decode=True)
+                if isinstance(payload, bytes):
+                    charset = part.get_content_charset() or "utf-8"
+                    payload = payload.decode(charset, errors="replace")
+                elif payload is None:
+                    payload = part.get_payload()
+                if isinstance(payload, str):
+                    payloads.append(payload)
+        except (TypeError, ValueError):
+            # A partial/truncated raw source can still contain an inline ICS.
+            pass
+    return detected, payloads
+
+
+def parse_ics_meetings(record):
+    """Return ICS meetings, or None when the record has no calendar payload."""
+    detected, payloads = _ics_payloads_from_record(record)
+    if not detected:
+        return None
+
+    meetings = []
+    seen = set()
+    for payload in payloads:
+        _, blocks = _ics_event_blocks(payload)
+        for block in blocks:
+            meeting = _parse_ics_event(block, record)
+            if meeting is None:
+                continue
+            key = (meeting.uid, meeting.start_at, meeting.title.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            meetings.append(meeting)
+    return meetings
+
+
+def _meeting_display_start(meeting):
+    start_at = meeting.start_at
+    if isinstance(start_at, datetime) and start_at.tzinfo is not None and ZoneInfo is not None:
+        try:
+            return start_at.astimezone(ZoneInfo(LOCAL_TIMEZONE_NAME))
+        except Exception:
+            pass
+    return start_at
+
+
+def _meeting_display_date(meeting):
+    start_at = _meeting_display_start(meeting)
+    return start_at.date() if isinstance(start_at, datetime) else start_at
+
+
+def _meeting_to_digest_record(meeting, position=0):
+    start_at = _meeting_display_start(meeting)
+    end_at = meeting.end_at
+    if isinstance(end_at, datetime) and end_at.tzinfo is not None and ZoneInfo is not None:
+        try:
+            end_at = end_at.astimezone(ZoneInfo(LOCAL_TIMEZONE_NAME))
+        except Exception:
+            pass
+
+    if isinstance(start_at, datetime):
+        label = start_at.strftime("%H:%M")
+        sort_minutes = start_at.hour * 60 + start_at.minute
+        if isinstance(end_at, datetime) and end_at.date() == start_at.date():
+            label = f"{label}–{end_at.strftime('%H:%M')}"
+    else:
+        label = "Tüm gün"
+        sort_minutes = 24 * 60
+
+    return {
+        "subject": meeting.title,
+        "sender": meeting.organizer or "Bilinmeyen gönderen",
+        "date": _meeting_display_date(meeting),
+        "time": label,
+        "sort_minutes": sort_minutes,
+        "uid": meeting.uid,
+        "organizer": meeting.organizer,
+        "location": meeting.location,
+        "join_url": meeting.join_url,
+        "status": meeting.status,
+        "source_message_id": meeting.source_message_id,
+        "confidence": meeting.confidence,
+        "_position": position,
+    }
 
 
 def _numeric_dot_token_kind(text, match):
@@ -364,11 +687,13 @@ def _time_for_date(text, date_hit):
         return None
 
     label = selected[0]["label"]
+    end_minutes = None
     if len(selected) > 1:
         between = text[selected[0]["end"]:selected[1]["start"]].casefold()
         if re.search(r"[-–—]|\b(to|until|ile|kadar)\b", between):
             label = f"{label}–{selected[1]['label']}"
-    return {"label": label, "minutes": selected[0]["minutes"]}
+            end_minutes = selected[1]["minutes"]
+    return {"label": label, "minutes": selected[0]["minutes"], "end_minutes": end_minutes}
 
 
 def _is_meeting_message(subject, content):
@@ -392,21 +717,49 @@ def _received_date_for_record(record, fallback_date):
     return received_date
 
 
-def _meeting_from_date_hit(record, subject, text, date_hit):
+def _semantic_meeting_from_date_hit(record, subject, text, date_hit):
     time_info = _time_for_date(text, date_hit)
-    return {
-        "subject": subject or "Başlıksız toplantı",
-        "sender": record.get("sender", "") or "Bilinmeyen gönderen",
-        "date": date_hit["date"],
-        "time": time_info["label"] if time_info else "Saat belirtilmemiş",
-        "sort_minutes": time_info["minutes"] if time_info else 24 * 60,
-        "_position": date_hit["start"],
-    }
+    start_at = date_hit["date"]
+    end_at = None
+    if time_info:
+        start_at = datetime.combine(
+            date_hit["date"],
+            datetime_time(time_info["minutes"] // 60, time_info["minutes"] % 60),
+        )
+        if time_info.get("end_minutes") is not None:
+            end_at = datetime.combine(
+                date_hit["date"],
+                datetime_time(
+                    time_info["end_minutes"] // 60,
+                    time_info["end_minutes"] % 60,
+                ),
+            )
+    return Meeting(
+        title=subject or "Başlıksız toplantı",
+        organizer=record.get("sender", "") or "Bilinmeyen gönderen",
+        start_at=start_at,
+        end_at=end_at,
+        source_message_id=record.get("source_message_id", "") or record.get("message_id", ""),
+        confidence=0.55,
+    )
 
 
 def extract_meetings(record, start_date, end_date=None):
     subject = record.get("subject", "")
     content = record.get("content", record.get("snippet", ""))
+
+    # Calendar data is authoritative. Do this before subject/keyword filtering
+    # so an invitation with a neutral subject is still recognized.
+    ics_meetings = parse_ics_meetings(record)
+    if ics_meetings is not None:
+        return [
+            _meeting_to_digest_record(meeting, position=index)
+            for index, meeting in enumerate(ics_meetings)
+            if meeting.status != "CANCELLED"
+            and _meeting_display_date(meeting) >= start_date
+            and (end_date is None or _meeting_display_date(meeting) <= end_date)
+        ]
+
     if not _is_meeting_message(subject, content):
         return []
 
@@ -419,7 +772,10 @@ def extract_meetings(record, start_date, end_date=None):
         if hit["date"] >= start_date and (end_date is None or hit["date"] <= end_date)
     ]
     return [
-        _meeting_from_date_hit(record, subject, text, date_hit)
+        _meeting_to_digest_record(
+            _semantic_meeting_from_date_hit(record, subject, text, date_hit),
+            position=date_hit["start"],
+        )
         for date_hit in matching_dates
     ]
 
@@ -456,15 +812,17 @@ def fetch_mail():
             
             parts = line.split(FIELD_DELIMITER)
             if len(parts) >= 6:
-                received_text = sanitize(parts[4])
+                received_text = sanitize_transport_field(parts[4])
                 records.append({
-                    "account": sanitize(parts[0]),
-                    "mailbox": sanitize(parts[1]),
-                    "sender": sanitize(parts[2]),
-                    "subject": sanitize(parts[3]),
+                    "account": sanitize_transport_field(parts[0]),
+                    "mailbox": sanitize_transport_field(parts[1]),
+                    "sender": sanitize_transport_field(parts[2]),
+                    "subject": sanitize_transport_field(parts[3]),
                     "date": received_text,
                     "received_date": parse_received_date(received_text),
-                    "content": sanitize(parts[5]),
+                    "content": sanitize_content(parts[5]),
+                    "source_message_id": sanitize_transport_field(parts[6]) if len(parts) >= 7 else "",
+                    "raw_source": sanitize_content(parts[7]) if len(parts) >= 8 else "",
                 })
 
         if result.returncode != 0 and not records:
@@ -512,7 +870,11 @@ def _collect_meetings(records, start_date, end_date=None):
 
     unique_meetings = {}
     for meeting in meetings:
-        key = (meeting["date"], meeting["time"], meeting["subject"].casefold())
+        key = (
+            meeting.get("uid") or meeting["date"],
+            meeting["time"],
+            meeting["subject"].casefold(),
+        )
         unique_meetings[key] = meeting
     return sorted(
         unique_meetings.values(),
@@ -534,6 +896,10 @@ def format_digest(records, target_date=None):
         sender = meeting["sender"][:80]
         lines.append(f"• {meeting['time']} — {subject}")
         lines.append(f"  Gönderen: {sender}")
+        if meeting.get("location"):
+            lines.append(f"  Yer: {meeting['location'][:160]}")
+        if meeting.get("join_url"):
+            lines.append(f"  Katılım: {meeting['join_url'][:300]}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -557,6 +923,10 @@ def format_upcoming_digest(records, start_date=None):
         sender = meeting["sender"][:80]
         lines.append(f"• {meeting['time']} — {subject}")
         lines.append(f"  Gönderen: {sender}")
+        if meeting.get("location"):
+            lines.append(f"  Yer: {meeting['location'][:160]}")
+        if meeting.get("join_url"):
+            lines.append(f"  Katılım: {meeting['join_url'][:300]}")
     return "\n".join(lines).rstrip()
 
 

@@ -7,6 +7,7 @@ Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 günde
 ## Ne yapar?
 
 - Türkçe ve İngilizce toplantı ifadelerini, tarihleri ve saatleri algılar.
+- Önce gerçek iCalendar/ICS verisini parse eder; ICS yoksa semantic metin parser'ına düşer.
 - `Bugün` ve `yarın` gibi göreli ifadeleri mesajın alındığı tarihe göre yorumlar.
 - Her gün saat 08:00'de o gün yapılacak toplantıları Telegram'a gönderir.
 - O gün toplantı yoksa `Bugün toplantı yok.` mesajını gönderir.
@@ -31,12 +32,32 @@ Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
 
 ## Mimari
 
-- `mail_fetcher.applescript`: Apple Mail'den yalnızca hedef hesabın birincil Inbox'ını okur.
-- `main.py`: Mesajları temizler, toplantıları ayrıştırır ve günlük/gelecek özetini üretir.
+- `mail_fetcher.applescript`: Apple Mail'den yalnızca hedef hesabın birincil Inbox'ını okur; subject yanında body calendar sinyallerini arar, satır sonlarını korur ve mümkünse ham MIME kaynağını taşır.
+- `main.py`: Önce MIME attachment veya inline `VCALENDAR/VEVENT` bloklarını parse eder. ICS bulunamazsa tarih/saat ve semantic meeting parser'ı fallback olarak çalışır.
 - `telegram_listener.py`: Yalnızca bağımsız kurulumlarda kullanılan Telegram listener'ıdır.
 - `scripts/install_launchd.py`: Makineye göre launchd plist dosyalarını üretir.
 - `HERMES_PROJECT_MEMORY.md`: Hermes için operasyonel proje hafızasıdır.
 - `AGENTS.md`: Bu projede değişiklik yaparken uyulacak kurallardır.
+
+### ICS-first veri akışı
+
+```text
+Apple Mail
+   ↓
+candidate message + raw MIME source
+   ↓
+ICS / MIME calendar parser
+   ↓  (ICS yoksa)
+semantic text parser
+   ↓
+canonical Meeting
+   ↓
+daily / upcoming Telegram digest
+```
+
+Canonical `Meeting` modeli şu alanları taşır: `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id` ve `confidence`. ICS toplantıları `confidence=1.0` ile gelir; semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir.
+
+`STATUS:CANCELLED` olan ICS etkinlikleri listeye alınmaz. `DTSTART;TZID=...`, UTC (`Z`) ve tarih-only ICS değerleri desteklenir; UTC zamanları Telegram özeti için Europe/Istanbul saatine çevrilir.
 
 AppleScript JSON üretmez; güvenli `__MAIL_DIGEST_FIELD__` ayırıcısını kullanır. Temizleme ve ayrıştırma Python tarafında yapılır. Böylece e-posta içindeki tırnak, ters bölü ve kontrol karakterleri Telegram çıktısını bozmaz.
 
