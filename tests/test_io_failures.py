@@ -1,4 +1,5 @@
 import subprocess
+import signal
 import unittest
 from unittest.mock import Mock, patch
 
@@ -16,32 +17,49 @@ class AppleMailSourceFailureTests(unittest.TestCase):
             stderr=stderr,
         )
 
-    @patch("mail_digest.sources.apple_mail.subprocess.run")
+    @patch("mail_digest.sources.apple_mail._run_applescript")
     def test_empty_mail_database_returns_empty_records(self, run):
         run.return_value = self.completed()
 
         self.assertEqual(fetch_mail(), [])
 
-    @patch("mail_digest.sources.apple_mail.subprocess.run")
+    @patch("mail_digest.sources.apple_mail._run_applescript")
     def test_corrupt_mail_output_is_ignored(self, run):
         run.return_value = self.completed("not a mail record\ninvalid" + FIELD_DELIMITER + "short")
 
         self.assertEqual(fetch_mail(), [])
 
-    @patch("mail_digest.sources.apple_mail.subprocess.run")
+    @patch("mail_digest.sources.apple_mail._run_applescript")
     def test_nonzero_applescript_exit_returns_none(self, run):
         run.return_value = self.completed(stderr="Mail database unavailable", returncode=1)
 
         self.assertIsNone(fetch_mail())
 
-    @patch("mail_digest.sources.apple_mail.subprocess.run")
+    @patch("mail_digest.sources.apple_mail._run_applescript", return_value=None)
     def test_applescript_timeout_returns_none(self, run):
-        run.side_effect = subprocess.TimeoutExpired(cmd="osascript", timeout=60)
+        del run
 
         self.assertIsNone(fetch_mail())
-        self.assertEqual(run.call_args.kwargs["timeout"], 60)
 
-    @patch("mail_digest.sources.apple_mail.subprocess.run")
+    @patch("mail_digest.sources.apple_mail.os.killpg")
+    @patch("mail_digest.sources.apple_mail.subprocess.Popen")
+    def test_applescript_timeout_kills_the_whole_process_group(self, popen, killpg):
+        process = popen.return_value
+        process.pid = 4321
+        process.args = ["osascript", "mail_fetcher.applescript"]
+        process.communicate.side_effect = [
+            subprocess.TimeoutExpired(cmd=process.args, timeout=60),
+            ("", ""),
+        ]
+
+        from mail_digest.sources.apple_mail import _run_applescript
+
+        self.assertIsNone(_run_applescript())
+        popen.assert_called_once()
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        killpg.assert_called_once_with(process.pid, signal.SIGKILL)
+
+    @patch("mail_digest.sources.apple_mail._run_applescript")
     def test_transport_record_is_sanitized_and_parsed(self, run):
         record = FIELD_DELIMITER.join([
             "Account",

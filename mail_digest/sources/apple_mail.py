@@ -1,5 +1,7 @@
 """Read-only Apple Mail source adapter."""
 
+import os
+import signal
 import subprocess
 
 from ..config import APPLE_SCRIPT_TIMEOUT_SECONDS, FIELD_DELIMITER, SCRIPT_PATH, log
@@ -7,16 +9,51 @@ from ..parsing.dates import parse_received_date
 from ..utils import sanitize, sanitize_content, sanitize_transport_field
 
 
+def _run_applescript():
+    """Run AppleScript with a killable process group.
+
+    ``subprocess.run(timeout=...)`` only terminates the direct ``osascript``
+    process. Apple Mail can leave descendants holding stdout/stderr open,
+    which would keep ``communicate()`` blocked and retain the digest lock.
+    Starting a new session lets timeout handling terminate the whole tree.
+    """
+
+    process = subprocess.Popen(
+        ["osascript", str(SCRIPT_PATH)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=APPLE_SCRIPT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        log("AppleScript timeout while reading Apple Mail")
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+        return None
+
+    return subprocess.CompletedProcess(
+        process.args,
+        process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
 def fetch_mail():
     """Fetch candidate messages from Apple Mail without changing message state."""
     try:
-        result = subprocess.run(
-            ["osascript", str(SCRIPT_PATH)],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=APPLE_SCRIPT_TIMEOUT_SECONDS,
-        )
+        result = _run_applescript()
+        if result is None:
+            return None
 
         raw_output = result.stdout + "\n" + result.stderr
         records = []
@@ -47,9 +84,6 @@ def fetch_mail():
             log(f"AppleScript error: {sanitize(result.stderr)}")
             return None
         return records
-    except subprocess.TimeoutExpired:
-        log("AppleScript timeout while reading Apple Mail")
-        return None
     except Exception as exc:
         log(f"Error fetching mail: {exc}")
         return None
