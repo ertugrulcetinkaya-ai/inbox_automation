@@ -34,7 +34,7 @@ Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
 
 ## Mimari
 
-- `mail_fetcher.applescript`: Apple Mail'den yalnızca hedef hesabın birincil Inbox'ını okur; subject yanında body calendar sinyallerini arar, satır sonlarını korur ve mümkünse ham MIME kaynağını taşır.
+- `mail_fetcher.applescript`: Apple Mail'den yalnızca hedef hesabın birincil Inbox'ındaki son 30 günlük mesajları okur; Mail'in tüm mailbox üzerinde yavaş çalışan tarih/body sorgularını kullanmak yerine tarih sınırını indeks sırasından bulur, konu adaylarında gövdeyi ve takvim daveti sinyali varsa ham MIME kaynağını taşır. Son toplantı/ICS doğrulaması Python tarafında yapılır.
 - `main.py`: launchd/Hermes uyumluluğu için ince giriş noktasıdır; mevcut import ve `python main.py` sözleşmesini korur.
 - `mail_digest/config.py`, `models.py`, `utils.py`: makine bağımsız ayarlar, canonical `Meeting` modeli ve ortak temizleme yardımcıları.
 - `mail_digest/sources/apple_mail.py`: AppleScript'i çalıştırır ve Mail transport kayıtlarını parse eder.
@@ -53,7 +53,7 @@ Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
 ```text
 Apple Mail
    ↓
-candidate message + raw MIME source
+candidate message + gerekli adaylarda raw MIME source
    ↓
 ICS / MIME calendar parser
    ↓  (ICS yoksa)

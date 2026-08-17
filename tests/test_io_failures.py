@@ -48,7 +48,7 @@ class AppleMailSourceFailureTests(unittest.TestCase):
         process.pid = 4321
         process.args = ["osascript", "mail_fetcher.applescript"]
         process.communicate.side_effect = [
-            subprocess.TimeoutExpired(cmd=process.args, timeout=60),
+            subprocess.TimeoutExpired(cmd=process.args, timeout=180),
             ("", ""),
         ]
 

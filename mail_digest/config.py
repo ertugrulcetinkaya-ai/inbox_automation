@@ -20,7 +20,10 @@ TRANSPORT_NEWLINE_TOKEN = "__MAIL_DIGEST_LINEBREAK__"
 TARGET_EMAIL = "ertugrul@cetinkayalar.com"
 LOCAL_TIMEZONE_NAME = "Europe/Istanbul"
 YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS = 60
-APPLE_SCRIPT_TIMEOUT_SECONDS = 60
+# Apple Mail can take several seconds per body when it has to hydrate a
+# remote/Gmail message. The fetcher already bounds the candidate set, but a
+# cold Mail process can still need more than one minute to finish safely.
+APPLE_SCRIPT_TIMEOUT_SECONDS = 180
 DIGEST_LOCK_FILE = Path(
     os.environ.get("MAIL_DIGEST_LOCK_FILE", "/tmp/mail_unread_digest.lock")
 ).expanduser()
