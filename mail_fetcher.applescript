@@ -92,7 +92,14 @@ tell application "Mail"
 							if receivedDateValue > cutoffDate then
 								set theSender to sender of theMsg
 								set receivedDate to receivedDateValue as string
-								set theContent to content of theMsg as string
+								set theContent to ""
+								try
+									set theContent to content of theMsg as string
+								on error
+									-- A single slow/remote message must not abort the whole digest.
+									-- Python can still use the subject and the remaining records.
+									set theContent to ""
+								end try
 								set sourceMessageId to ""
 								try
 									set sourceMessageId to (message id of theMsg) as string
