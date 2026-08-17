@@ -77,3 +77,7 @@ def main():
         # it can show the user a useful status message.
         log("Digest is already running; skipping this invocation")
         return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

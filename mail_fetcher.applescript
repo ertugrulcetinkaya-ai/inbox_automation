@@ -40,68 +40,109 @@ tell application "Mail"
 
 		if isTargetAccount is true then
 			set accountName to name of theAccount
-			set allMailboxes to every mailbox of theAccount
+			-- Resolve the primary Inbox directly. Enumerating the mailbox hierarchy can
+			-- force Mail to walk a large folder hierarchy before any message work.
+			set primaryMailbox to missing value
+			try
+				set primaryMailbox to mailbox "INBOX" of theAccount
+			on error
+				try
+					set primaryMailbox to mailbox "Inbox" of theAccount
+				on error
+					set primaryMailbox to missing value
+				end try
+			end try
 
-			repeat with theMailbox in allMailboxes
+			if primaryMailbox is not missing value then
+				set theMailbox to primaryMailbox
 				set mailboxName to name of theMailbox
 
-				-- Only the primary Inbox is in scope.
-				if mailboxName is equal to "INBOX" or mailboxName is equal to "Inbox" then
-					-- Meeting invitations are included even if they were already read.
-					-- The Python layer performs the final meeting/date validation.
-					set inboxMessages to (every message of theMailbox whose date received is greater than cutoffDate and ¬
-						(subject contains "meeting" or subject contains "toplant" or subject contains "görüşme" or ¬
-						subject contains "gorusme" or subject contains "invitation" or subject contains "invite" or ¬
-						subject contains "calendar" or subject contains "takvim" or subject contains "appointment" or ¬
-						subject contains "randevu" or subject contains "interview" or subject contains "mülakat" or ¬
-						subject contains "mulakat" or subject contains "conference" or subject contains "konferans" or ¬
-						subject contains "seminar" or subject contains "webinar" or subject contains "event" or ¬
-						subject contains "etkinlik" or subject contains "schedule" or subject contains "planlama" or ¬
-						subject contains "davetiye" or subject contains "zoom" or subject contains "teams" or ¬
-						subject contains "webex" or subject contains "call" or subject contains "sync" or ¬
-						content contains "BEGIN:VCALENDAR" or content contains "BEGIN:VEVENT" or ¬
-						content contains "text/calendar" or content contains ".ics" or ¬
-						content contains "microsoft teams" or content contains "teams toplant" or ¬
-						content contains "zoom.us" or content contains "webex.com" or ¬
-						content contains "join meeting" or content contains "katılın" or ¬
-						content contains "toplantı" or content contains "toplanti"))
+				-- Mail's date-based `whose` query scans all 13k+ messages in a
+				-- mailbox. Messages are ordered newest-first, so locate the 30-day
+				-- boundary with a binary search and inspect only the recent range.
+				set messageCount to count of messages of theMailbox
+				set firstNonRecent to messageCount + 1
+				set lowIndex to 1
+				set highIndex to messageCount
+				repeat while lowIndex is less than or equal to highIndex
+					set middleIndex to (lowIndex + highIndex) div 2
+					if (date received of message middleIndex of theMailbox) > cutoffDate then
+						set lowIndex to middleIndex + 1
+					else
+						set firstNonRecent to middleIndex
+						set highIndex to middleIndex - 1
+					end if
+				end repeat
 
-					repeat with theMsg in inboxMessages
-						set theSender to sender of theMsg
+				set recentCount to firstNonRecent - 1
+				if recentCount > 0 then
+					set recentMessages to messages 1 thru recentCount of theMailbox
+					repeat with theMsg in recentMessages
 						set theSubject to subject of theMsg
-						set receivedDate to (date received of theMsg) as string
-						set theContent to content of theMsg as string
-						set sourceMessageId to ""
-						try
-							set sourceMessageId to (message id of theMsg) as string
-						end try
-						set rawSource to ""
-						try
-							set rawSource to source of theMsg as string
-						end try
+						if (theSubject contains "meeting" or theSubject contains "toplant" or theSubject contains "görüşme" or ¬
+							theSubject contains "gorusme" or theSubject contains "invitation" or theSubject contains "invite" or ¬
+							theSubject contains "calendar" or theSubject contains "takvim" or theSubject contains "appointment" or ¬
+							theSubject contains "randevu" or theSubject contains "interview" or theSubject contains "mülakat" or ¬
+							theSubject contains "mulakat" or theSubject contains "conference" or theSubject contains "konferans" or ¬
+							theSubject contains "seminar" or theSubject contains "webinar" or theSubject contains "event" or ¬
+							theSubject contains "etkinlik" or theSubject contains "schedule" or theSubject contains "planlama" or ¬
+							theSubject contains "davetiye" or theSubject contains "zoom" or theSubject contains "teams" or ¬
+							theSubject contains "webex" or theSubject contains "call" or theSubject contains "sync") then
+							set receivedDateValue to date received of theMsg
+							if receivedDateValue > cutoffDate then
+								set theSender to sender of theMsg
+								set receivedDate to receivedDateValue as string
+								set theContent to content of theMsg as string
+								set sourceMessageId to ""
+								try
+									set sourceMessageId to (message id of theMsg) as string
+								end try
+								set rawSource to ""
+								-- Reading `source` is much slower than reading the body. Only
+								-- request it for subjects that strongly suggest a calendar
+								-- invitation or when the body already exposes an ICS marker.
+								-- Ordinary meeting messages still use the fast semantic parser.
+								set needsRawSource to false
+								if (theSubject contains "invitation" or theSubject contains "invite" or ¬
+									theSubject contains "calendar" or theSubject contains "takvim" or ¬
+									theSubject contains "davetiye" or theSubject contains ".ics") then
+									set needsRawSource to true
+								end if
+								if (theContent contains "BEGIN:VCALENDAR" or theContent contains "BEGIN:VEVENT" or ¬
+									theContent contains "text/calendar" or theContent contains "METHOD:REQUEST" or ¬
+									theContent contains "METHOD:PUBLISH" or theContent contains "METHOD:CANCEL") then
+									set needsRawSource to true
+								end if
+								if needsRawSource is true then
+									try
+										set rawSource to source of theMsg as string
+									end try
+								end if
 
-						-- Keep the transport one-record-per-line and bound the payload size.
-						if (count of theContent) > maxContentChars then
-							set theContent to text 1 thru maxContentChars of theContent
-						end if
-						if (count of rawSource) > maxSourceChars then
-							set rawSource to text 1 thru maxSourceChars of rawSource
-						end if
+								-- Keep the transport one-record-per-line and bound the payload size.
+								if (count of theContent) > maxContentChars then
+									set theContent to text 1 thru maxContentChars of theContent
+								end if
+								if (count of rawSource) > maxSourceChars then
+									set rawSource to text 1 thru maxSourceChars of rawSource
+								end if
 
-						set recordLine to (my flattenField(accountName, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
-							(my flattenField(mailboxName, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
-							(my flattenField(theSender, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
-							(my flattenField(theSubject, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
-							(my flattenField(receivedDate, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
-							(my flattenField(theContent, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
-							(my flattenField(sourceMessageId, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
-							(my flattenField(rawSource, fieldDelimiter, lineBreakToken))
-						set finalOutput to finalOutput & recordLine & linefeed
+								set recordLine to (my flattenField(accountName, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
+									(my flattenField(mailboxName, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
+									(my flattenField(theSender, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
+									(my flattenField(theSubject, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
+									(my flattenField(receivedDate, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
+									(my flattenField(theContent, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
+									(my flattenField(sourceMessageId, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
+									(my flattenField(rawSource, fieldDelimiter, lineBreakToken))
+								set finalOutput to finalOutput & recordLine & linefeed
+							end if
+						end if
 					end repeat
 				end if
-			end repeat
-		end if
-	end repeat
+				end if
+			end if
+		end repeat
 
 	return finalOutput
 end tell
