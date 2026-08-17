@@ -7,6 +7,7 @@ set targetEmail to "ertugrul@cetinkayalar.com"
 set maxContentChars to 40000
 set maxSourceChars to 100000
 set lookbackDays to 30
+set messageReadTimeoutSeconds to 20
 
 on replaceText(theText, searchString, replacementString)
 	set AppleScript's text item delimiters to searchString
@@ -95,7 +96,9 @@ tell application "Mail"
 								set receivedDate to receivedDateValue as string
 								set theContent to ""
 								try
-									set theContent to content of theMsg as string
+									with timeout of messageReadTimeoutSeconds seconds
+										set theContent to content of theMsg as string
+									end timeout
 								on error
 									-- A single slow/remote message must not abort the whole digest.
 									-- Python can still use the subject and the remaining records.
@@ -123,7 +126,9 @@ tell application "Mail"
 								end if
 								if needsRawSource is true then
 									try
+									with timeout of messageReadTimeoutSeconds seconds
 										set rawSource to source of theMsg as string
+									end timeout
 									end try
 								end if
 
