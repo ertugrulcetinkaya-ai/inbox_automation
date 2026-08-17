@@ -78,8 +78,9 @@ tell application "Mail"
 				if recentCount > 0 then
 					set recentMessages to messages 1 thru recentCount of theMailbox
 					repeat with theMsg in recentMessages
-						set theSubject to subject of theMsg
-						if (theSubject contains "meeting" or theSubject contains "toplant" or theSubject contains "görüşme" or ¬
+						try
+							set theSubject to subject of theMsg
+							if (theSubject contains "meeting" or theSubject contains "toplant" or theSubject contains "görüşme" or ¬
 							theSubject contains "gorusme" or theSubject contains "invitation" or theSubject contains "invite" or ¬
 							theSubject contains "calendar" or theSubject contains "takvim" or theSubject contains "appointment" or ¬
 							theSubject contains "randevu" or theSubject contains "interview" or theSubject contains "mülakat" or ¬
@@ -144,7 +145,11 @@ tell application "Mail"
 									(my flattenField(rawSource, fieldDelimiter, lineBreakToken))
 								set finalOutput to finalOutput & recordLine & linefeed
 							end if
-						end if
+							end if
+						on error
+							-- A broken/remote Mail object must not abort the whole batch.
+							-- Continue with the next recent message instead.
+						end try
 					end repeat
 				end if
 				end if
