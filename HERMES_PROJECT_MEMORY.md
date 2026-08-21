@@ -17,6 +17,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - Meeting status is normalized to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; `STATUS:CANCELLED` and `METHOD:CANCEL` must suppress the event.
 - For the same ICS `UID`, the highest `SEQUENCE` wins. Semantic reschedule messages must keep the new date and discard the old date.
 - AppleScript transport must preserve content line breaks and may carry raw MIME source; do not flatten ICS content before Python parsing.
+- Apple Mail rollback intentionally reads every message body so neutral-subject meetings are not dropped; this has a known performance cost and previously exceeded 180 seconds locally. Gmail is the production transport and avoids that rollback limitation.
 - Dotted numeric tokens are classified before extraction: `10.30` and `10.30–11.30` remain times, while `15.08`/`15.08.2026` remain dates; ambiguous `DD.MM` tokens require nearby date context.
 - Weekday expressions are anchored to the received date: bare `Cuma` resolves to the next occurrence, `bu/this` keeps the next practical occurrence, and `önümüzdeki/next` requires a strictly future occurrence when the message arrives on that weekday.
 - Yearless dates use the target year first; when that candidate is at least 60 days in the past, the next-year candidate is evaluated. For example, `5 Ocak` on 20 December resolves to 5 January of the following year, while a recent past date stays in the current year.

@@ -126,7 +126,7 @@ Production transport Gmail'dir: `MAIL_SOURCE=gmail` kullanın. Gmail hatasında 
 
 Komut varsayılan olarak yalnızca preview üretir; gerçek production job bu repository değişikliğiyle Gmail'e çevrilmez.
 
-Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail` ile yeniden üretip doğrulayın. Rollback geçici bir işletim prosedürüdür; Apple Mail Issue-2 davranışı Gmail yolunun yerine kalıcı production kaynağı değildir.
+Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail` ile yeniden üretip doğrulayın. Apple Mail rollback'inin bilinen performans sınırlaması vardır: nötr konulu toplantıları kaçırmamak için 30 günlük penceredeki her mesajın gövdesini okumaya çalışır; geçmiş yerel doğrulamalarda bu yol 180 saniyeyi aşmıştır. Rollback geçici bir işletim prosedürüdür; Apple Mail Issue-2 davranışı Gmail yolunun yerine kalıcı production kaynağı değildir.
 
 `gmail.readonly` restricted bir kapsamdır. External OAuth projesi Testing durumunda bırakılırsa bu tür kapsamlar için refresh token'ları 7 günle sınırlı olabilir; uzun süreli unattended kullanım öncesinde Google Auth Platform production yapılandırması operatör tarafından tamamlanmalıdır.
 
