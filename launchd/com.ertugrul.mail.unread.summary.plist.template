@@ -14,6 +14,18 @@
     <key>WorkingDirectory</key>
     <string>__PROJECT_ROOT__</string>
 
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MAIL_SOURCE</key>
+        <string>__MAIL_SOURCE__</string>
+        <key>GMAIL_CREDENTIALS_FILE</key>
+        <string>__GMAIL_CREDENTIALS_FILE__</string>
+        <key>GMAIL_TOKEN_FILE</key>
+        <string>__GMAIL_TOKEN_FILE__</string>
+        <key>GMAIL_CACHE_FILE</key>
+        <string>__GMAIL_CACHE_FILE__</string>
+    </dict>
+
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>

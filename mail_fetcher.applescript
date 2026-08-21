@@ -80,16 +80,18 @@ tell application "Mail"
 					set recentMessages to messages 1 thru recentCount of theMailbox
 					repeat with theMsg in recentMessages
 						try
-							set theSubject to subject of theMsg
-							if (theSubject contains "meeting" or theSubject contains "toplant" or theSubject contains "görüşme" or ¬
-							theSubject contains "gorusme" or theSubject contains "invitation" or theSubject contains "invite" or ¬
-							theSubject contains "calendar" or theSubject contains "takvim" or theSubject contains "appointment" or ¬
-							theSubject contains "randevu" or theSubject contains "interview" or theSubject contains "mülakat" or ¬
-							theSubject contains "mulakat" or theSubject contains "conference" or theSubject contains "konferans" or ¬
-							theSubject contains "seminar" or theSubject contains "webinar" or theSubject contains "event" or ¬
-							theSubject contains "etkinlik" or theSubject contains "schedule" or theSubject contains "planlama" or ¬
-							theSubject contains "davetiye" or theSubject contains "zoom" or theSubject contains "teams" or ¬
-							theSubject contains "webex" or theSubject contains "call" or theSubject contains "sync") then
+							-- Subject retrieval is fail-open: a broken subject must not drop the
+							-- message, because meeting evidence may live only in the body. Python is
+							-- the sole meeting-selection authority; there is no subject-based gate here.
+							set theSubject to ""
+							try
+								set subjectValue to subject of theMsg
+								if subjectValue is not missing value then
+									set theSubject to subjectValue as text
+								end if
+							on error
+								set theSubject to ""
+							end try
 							set receivedDateValue to date received of theMsg
 							if receivedDateValue > cutoffDate then
 								set theSender to sender of theMsg
@@ -124,6 +126,43 @@ tell application "Mail"
 									theContent contains "METHOD:PUBLISH" or theContent contains "METHOD:CANCEL") then
 									set needsRawSource to true
 								end if
+								-- Turkish calendar invitation subject prefix (raw-source signal only, not a gate).
+								if needsRawSource is false then
+									if (count of theSubject) >= 6 then
+										set davetPrefix to text 1 thru 6 of theSubject
+										ignoring case
+											if davetPrefix is "davet:" then set needsRawSource to true
+										end ignoring
+									end if
+								end if
+								-- .ics attachment metadata signal (raw-source only). Enumerate attachments only when
+								-- no other calendar signal already triggered the fetch. Read-only: inspects names,
+								-- never saves/opens/mutates attachments or messages.
+								if needsRawSource is false then
+									try
+										with timeout of messageReadTimeoutSeconds seconds
+											set attachmentList to attachments of theMsg
+											repeat with theAttachment in attachmentList
+												try
+													set attachmentName to name of theAttachment as string
+													if (count of attachmentName) >= 4 then
+														set nameSuffix to text -4 thru -1 of attachmentName
+														ignoring case
+															if nameSuffix is ".ics" then
+																set needsRawSource to true
+																exit repeat
+															end if
+														end ignoring
+													end if
+												on error
+													-- An unreadable attachment must not abort the message.
+												end try
+											end repeat
+										end timeout
+									on error
+										-- An unreadable attachment list must not abort the message.
+									end try
+								end if
 								if needsRawSource is true then
 									try
 									with timeout of messageReadTimeoutSeconds seconds
@@ -149,7 +188,6 @@ tell application "Mail"
 									(my flattenField(sourceMessageId, fieldDelimiter, lineBreakToken)) & fieldDelimiter & ¬
 									(my flattenField(rawSource, fieldDelimiter, lineBreakToken))
 								set finalOutput to finalOutput & recordLine & linefeed
-							end if
 							end if
 						on error
 							-- A broken/remote Mail object must not abort the whole batch.

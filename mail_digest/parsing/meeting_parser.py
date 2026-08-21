@@ -7,6 +7,7 @@ from datetime import date, datetime, time as datetime_time
 
 from ..config import (
     CALENDAR_MARKERS,
+    CALENDAR_SUBJECT_PREFIXES,
     LOCAL_TIMEZONE_NAME,
     MEETING_KEYWORDS,
     SEMANTIC_CANCELLED_RE,
@@ -78,7 +79,12 @@ def _meeting_to_digest_record(meeting, position=0, date_override=None):
 
 def _is_meeting_message(subject, content):
     haystack = f"{subject}\n{content}".casefold()
-    return any(keyword in haystack for keyword in MEETING_KEYWORDS + CALENDAR_MARKERS)
+    if any(keyword in haystack for keyword in MEETING_KEYWORDS + CALENDAR_MARKERS):
+        return True
+    # Subject-specific calendar invitation prefixes (e.g. Turkish "Davet:") are
+    # matched only on the normalized subject, never across the body.
+    normalized_subject = (subject or "").casefold()
+    return any(normalized_subject.startswith(prefix) for prefix in CALENDAR_SUBJECT_PREFIXES)
 
 
 def _received_date_for_record(record, fallback_date):

@@ -11,13 +11,19 @@ from .services.meeting_service import (
     format_upcoming_digest,
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
-from .sources.apple_mail import fetch_mail
+from .sources import MailSourceConfigurationError, fetch_mail, selected_source_name
 
 
 def _run_digest(upcoming=False, dry_run=False):
     log("START daily meeting digest")
+    log(f"Mail source: {selected_source_name()}")
     log("Fetching recent meeting candidates")
-    records = fetch_mail()
+    try:
+        records = fetch_mail()
+    except MailSourceConfigurationError as exc:
+        log(f"Mail source configuration error: {exc}")
+        log("DONE daily meeting digest (FAILED)")
+        return 1
     if records is None:
         log("Failed to retrieve data.")
         log("DONE daily meeting digest (FAILED)")

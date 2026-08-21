@@ -92,7 +92,7 @@ from mail_digest.services.meeting_service import (
     format_digest,
     format_upcoming_digest,
 )
-from mail_digest.sources.apple_mail import fetch_mail
+from mail_digest.sources import fetch_mail
 from mail_digest.utils import (
     restore_transport_newlines,
     sanitize,

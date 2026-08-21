@@ -1,6 +1,6 @@
 # Inbox Automation
 
-`inbox_automation`, `ertugrul@cetinkayalar.com` hesabının Apple Mail gelen kutusunu okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur.
+`inbox_automation`, `ertugrul@cetinkayalar.com` hesabının üretim Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Apple Mail yalnızca rollback kaynağı olarak korunur. Üretim launchd ortamı `MAIL_SOURCE=gmail` kullanır; ortam değişkeni yoksa kodun güvenli yerel varsayılanı `apple_mail` olarak kalır.
 
 Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 gündeki mesajları inceler. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
 
@@ -34,10 +34,11 @@ Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
 
 ## Mimari
 
-- `mail_fetcher.applescript`: Apple Mail'den yalnızca hedef hesabın birincil Inbox'ındaki son 30 günlük mesajları okur; Mail'in tüm mailbox üzerinde yavaş çalışan tarih/body sorgularını kullanmak yerine tarih sınırını indeks sırasından bulur, konu adaylarında gövdeyi ve takvim daveti sinyali varsa ham MIME kaynağını taşır. Son toplantı/ICS doğrulaması Python tarafında yapılır.
+- `mail_fetcher.applescript`: rollback kaynağı olarak Apple Mail'den yalnızca hedef hesabın birincil Inbox'ındaki son 30 günlük mesajları okur; Mail'in tüm mailbox üzerinde yavaş çalışan tarih/body sorgularını kullanmak yerine tarih sınırını indeks sırasından bulur, penceredeki her mesaj için gövde okuma denemesi yapar ve takvim daveti sinyali (konu, gövde, `.ics` ek adı veya Türkçe `Davet:` konu öneki) varsa ham MIME kaynağını seçici olarak taşır. Bir mesajın toplantı içerip içermediğine Python karar verir; AppleScript konu bazlı eleme yapmaz.
 - `main.py`: launchd/Hermes uyumluluğu için ince giriş noktasıdır; mevcut import ve `python main.py` sözleşmesini korur.
 - `mail_digest/config.py`, `models.py`, `utils.py`: makine bağımsız ayarlar, canonical `Meeting` modeli ve ortak temizleme yardımcıları.
 - `mail_digest/sources/apple_mail.py`: AppleScript'i çalıştırır ve Mail transport kayıtlarını parse eder.
+- `mail_digest/sources/gmail/`: Gmail OAuth, salt-okunur API, MIME normalizasyonu, SQLite cache ve history senkronizasyon katmanıdır.
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
@@ -51,9 +52,9 @@ Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
 ### ICS-first veri akışı
 
 ```text
-Apple Mail
+Gmail API production kaynağı veya Apple Mail rollback kaynağı (son 30 gün)
    ↓
-candidate message + gerekli adaylarda raw MIME source
+her mesajın gövdesi + takvim sinyali olanlarda raw MIME source
    ↓
 ICS / MIME calendar parser
    ↓  (ICS yoksa)
@@ -91,7 +92,43 @@ python3 -m venv .venv
 .venv/bin/python main.py --dry-run
 ```
 
-Apple Mail açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası, `COMPANY_REPORT_ROOT` ile Company Reporting checkout yolu değiştirilebilir.
+Apple Mail yalnızca yerel rollback çalıştıracaksanız açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası, `COMPANY_REPORT_ROOT` ile Company Reporting checkout yolu değiştirilebilir.
+
+## Gmail API kurulumu ve production kullanımı
+
+Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth kapsamını ister. Kod mesajları değiştirmez, etiketlemez, okundu durumunu değiştirmez, taşımaz, silmez veya göndermez. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest de başarısız olur.
+
+1. Google Cloud projesinde Gmail API'yi etkinleştirin ve Desktop application OAuth istemcisi oluşturun. OAuth doğrulamasının tamamlandığı varsayılmaz; bu operatör adımıdır.
+2. İndirilen istemci dosyasını `~/.hermes_local_automation/gmail/credentials.json` konumuna koyun ve `chmod 600` uygulayın.
+3. Bağımlılıkları `requirements.txt` üzerinden kurduktan sonra bir kez interaktif yetkilendirme çalıştırın:
+
+   ```bash
+   .venv/bin/python scripts/gmail_auth.py
+   ```
+
+   Normal `main.py` çalışması hiçbir zaman tarayıcı açmaz. Token eksik, geçersiz veya yenilenemiyorsa açık bir hatayla durur.
+
+4. İlk canlı kontrolü production job'ını değiştirmeden yapın:
+
+   ```bash
+   MAIL_SOURCE=gmail .venv/bin/python main.py --upcoming --dry-run
+   ```
+
+Varsayılan yollar `~/.hermes_local_automation/gmail/token.json` ve `~/.hermes_local_automation/gmail/cache.sqlite3`'tür. Sırasıyla `GMAIL_CREDENTIALS_FILE`, `GMAIL_TOKEN_FILE` ve `GMAIL_CACHE_FILE` ile değiştirilebilir. Bu credential, token ve cache dosyalarını repoya koymayın.
+
+İlk Gmail çalışması, `getProfile` history sınırını snapshot'tan önce alır; 31 günlük sunucu sorgusunu yerel kesin 30×24 saat filtresiyle daraltır, bağımsız staging snapshot oluşturur, snapshot sırasında oluşan history değişikliklerini güncel mesaj durumuyla uzlaştırır ve cache ile checkpoint'i tek SQLite transaction'ında etkinleştirir. Sonraki çalışmalar yalnızca checkpoint sonrasındaki `messagesAdded`, `messagesDeleted`, `labelsAdded` ve `labelsRemoved` değişikliklerini uzlaştırır. Eski history checkpoint'i HTTP 404 verirse güvenli tam sync yeniden başlar. Mesaj içeriği bozuksa yapısal kimlik/INBOX/tarih bilgisi geçerli olduğu sürece boş içerikli degraded kayıt saklanır.
+
+Production transport Gmail'dir: `MAIL_SOURCE=gmail` kullanın. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest başarısız olur. launchd dosyalarını Gmail ayarlarıyla preview olarak üretmek için:
+
+```bash
+.venv/bin/python scripts/install_launchd.py --mail-source gmail
+```
+
+Komut varsayılan olarak yalnızca preview üretir; gerçek production job bu repository değişikliğiyle Gmail'e çevrilmez.
+
+Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail` ile yeniden üretip doğrulayın. Rollback geçici bir işletim prosedürüdür; Apple Mail Issue-2 davranışı Gmail yolunun yerine kalıcı production kaynağı değildir.
+
+`gmail.readonly` restricted bir kapsamdır. External OAuth projesi Testing durumunda bırakılırsa bu tür kapsamlar için refresh token'ları 7 günle sınırlı olabilir; uzun süreli unattended kullanım öncesinde Google Auth Platform production yapılandırması operatör tarafından tamamlanmalıdır.
 
 ## Çalıştırma modeli
 

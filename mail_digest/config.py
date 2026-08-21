@@ -27,6 +27,27 @@ APPLE_SCRIPT_TIMEOUT_SECONDS = 180
 DIGEST_LOCK_FILE = Path(
     os.environ.get("MAIL_DIGEST_LOCK_FILE", "/tmp/mail_unread_digest.lock")
 ).expanduser()
+MAIL_SOURCE_DEFAULT = "apple_mail"
+GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
+GMAIL_DATA_DIR = Path.home() / ".hermes_local_automation" / "gmail"
+
+
+def gmail_credentials_file():
+    return Path(
+        os.environ.get("GMAIL_CREDENTIALS_FILE", str(GMAIL_DATA_DIR / "credentials.json"))
+    ).expanduser()
+
+
+def gmail_token_file():
+    return Path(
+        os.environ.get("GMAIL_TOKEN_FILE", str(GMAIL_DATA_DIR / "token.json"))
+    ).expanduser()
+
+
+def gmail_cache_file():
+    return Path(
+        os.environ.get("GMAIL_CACHE_FILE", str(GMAIL_DATA_DIR / "cache.sqlite3"))
+    ).expanduser()
 
 TURKISH_MONTHS = {
     "ocak": 1,
@@ -76,6 +97,14 @@ MEETING_KEYWORDS = (
 CALENDAR_MARKERS = (
     "when:", "where:", "organizer:", "attendees:", "join meeting",
     "join us", ".ics", "icalendar", "add to calendar", "takvime ekle",
+)
+
+# Subject-specific Turkish calendar invitation prefix. Matched only on the
+# normalized subject (not searched across the body) so ordinary prose such as a
+# "davet mektubu" does not become a false positive. This is a semantic signal
+# only; an authoritative ICS result never depends on it.
+CALENDAR_SUBJECT_PREFIXES = (
+    "davet:",
 )
 
 ICS_MARKERS = (

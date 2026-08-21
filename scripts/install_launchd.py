@@ -23,10 +23,25 @@ TEMPLATES = {
 }
 
 
-def render_template(template_path: Path) -> bytes:
+def render_template(
+    template_path: Path,
+    mail_source="apple_mail",
+    gmail_credentials_file=None,
+    gmail_token_file=None,
+    gmail_cache_file=None,
+) -> bytes:
+    gmail_root = Path.home() / ".hermes_local_automation" / "gmail"
     text = template_path.read_text(encoding="utf-8")
     rendered = text.replace("__PROJECT_ROOT__", str(PROJECT_ROOT))
     rendered = rendered.replace("__PYTHON_PATH__", str(PROJECT_ROOT / ".venv" / "bin" / "python"))
+    replacements = {
+        "__MAIL_SOURCE__": mail_source,
+        "__GMAIL_CREDENTIALS_FILE__": str(gmail_credentials_file or gmail_root / "credentials.json"),
+        "__GMAIL_TOKEN_FILE__": str(gmail_token_file or gmail_root / "token.json"),
+        "__GMAIL_CACHE_FILE__": str(gmail_cache_file or gmail_root / "cache.sqlite3"),
+    }
+    for marker, value in replacements.items():
+        rendered = rendered.replace(marker, value)
     payload = rendered.encode("utf-8")
     plistlib.loads(payload)
     return payload
@@ -40,6 +55,15 @@ def main() -> int:
         help="Write rendered plists into ~/Library/LaunchAgents",
     )
     parser.add_argument(
+        "--mail-source",
+        choices=("apple_mail", "gmail"),
+        default="apple_mail",
+        help="Mail transport to render (default is the conservative apple_mail local setting)",
+    )
+    parser.add_argument("--gmail-credentials-file", type=Path)
+    parser.add_argument("--gmail-token-file", type=Path)
+    parser.add_argument("--gmail-cache-file", type=Path)
+    parser.add_argument(
         "--include-listener",
         action="store_true",
         help="Also install the standalone Telegram listener (avoid when Hermes Gateway owns the bot)",
@@ -51,7 +75,13 @@ def main() -> int:
         selected.append("listener")
 
     rendered = {
-        key: render_template(TEMPLATES[key])
+        key: render_template(
+            TEMPLATES[key],
+            mail_source=args.mail_source,
+            gmail_credentials_file=args.gmail_credentials_file,
+            gmail_token_file=args.gmail_token_file,
+            gmail_cache_file=args.gmail_cache_file,
+        )
         for key in selected
     }
     for key in selected:
