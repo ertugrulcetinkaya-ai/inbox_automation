@@ -17,13 +17,26 @@ from ..config import (
 from ..models import Meeting
 from .dates import _date_hits, parse_received_date
 from .ics import parse_ics_meetings
-from .times import _time_for_date
+from .times import _time_for_date, _time_hits
 from ..utils import strip_quoted_reply
 
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover - Python 3.9+ provides zoneinfo
     ZoneInfo = None
+
+
+SEMANTIC_CONTEXT_RADIUS = 160
+EXPLICIT_MEETING_CONTEXT_RE = re.compile(
+    r"(?:\b(?:"
+    r"toplant[ıi]\w*|meeting\w*|appointment\w*|randevu\w*|"
+    r"görüş\w*|gorus\w*|etkinlik\w*|event\w*|conference\w*|"
+    r"konferans\w*|seminar\w*|webinar\w*|interview\w*|"
+    r"mülakat\w*|mulakat\w*|invitation\w*|invite\w*|davetiye\w*|"
+    r"zoom\w*|webex\w*"
+    r")\b|google\s+meet\b|microsoft\s+teams\b|join\s+meeting\b)",
+    re.IGNORECASE,
+)
 
 
 def _meeting_display_start(meeting):
@@ -85,10 +98,61 @@ def _is_meeting_message(subject, content):
     haystack = f"{subject}\n{content}".casefold()
     if any(keyword in haystack for keyword in MEETING_KEYWORDS + CALENDAR_MARKERS):
         return True
+    if EXPLICIT_MEETING_CONTEXT_RE.search(haystack):
+        return True
     # Subject-specific calendar invitation prefixes (e.g. Turkish "Davet:") are
     # matched only on the normalized subject, never across the body.
     normalized_subject = (subject or "").casefold()
     return any(normalized_subject.startswith(prefix) for prefix in CALENDAR_SUBJECT_PREFIXES)
+
+
+def _has_strong_subject_signal(subject):
+    normalized_subject = (subject or "").casefold()
+    return bool(EXPLICIT_MEETING_CONTEXT_RE.search(normalized_subject)) or any(
+        normalized_subject.startswith(prefix) for prefix in CALENDAR_SUBJECT_PREFIXES
+    )
+
+
+def _distance_to_date(item, date_hit):
+    if item["end"] <= date_hit["start"]:
+        return date_hit["start"] - item["end"]
+    if item["start"] >= date_hit["end"]:
+        return item["start"] - date_hit["end"]
+    return 0
+
+
+def _semantic_context_for_date(text, date_hit):
+    start = max(0, date_hit["start"] - SEMANTIC_CONTEXT_RADIUS)
+    end = min(len(text), date_hit["end"] + SEMANTIC_CONTEXT_RADIUS)
+    return text[start:end]
+
+
+def _has_time_near_date(text, date_hit):
+    return any(
+        _distance_to_date(time_hit, date_hit) <= SEMANTIC_CONTEXT_RADIUS
+        for time_hit in _time_hits(text)
+    )
+
+
+def _passes_detailed_semantic_review(subject, text, date_hit):
+    """Confirm a non-ICS date is really tied to a meeting context.
+
+    A strong meeting signal in the subject can support an all-day semantic
+    event. Body-only candidates are deliberately stricter: the date must have
+    both an explicit meeting phrase and a nearby time. This keeps report,
+    signature and quoted-thread dates out of the digest without hiding
+    low-confidence meetings that do pass the second review.
+    """
+
+    if _has_strong_subject_signal(subject):
+        return True
+
+    context = _semantic_context_for_date(text, date_hit)
+    normalized_context = context.casefold()
+    has_meeting_context = bool(EXPLICIT_MEETING_CONTEXT_RE.search(context)) or any(
+        marker in normalized_context for marker in CALENDAR_MARKERS
+    )
+    return has_meeting_context and _has_time_near_date(text, date_hit)
 
 
 def _received_date_for_record(record, fallback_date):
@@ -193,7 +257,11 @@ def extract_meetings(
 
     text = f"{subject}\n{content}"
     status = _semantic_status(text)
-    date_hits = _date_hits(text, start_date, relative_date=received_date)
+    date_hits = [
+        hit
+        for hit in _date_hits(text, start_date, relative_date=received_date)
+        if _passes_detailed_semantic_review(subject, text, hit)
+    ]
     lifecycle_date_hits = _semantic_date_hits_for_status(text, date_hits, status)
     if include_lifecycle_outside_range and status == "RESCHEDULED":
         matching_dates = lifecycle_date_hits

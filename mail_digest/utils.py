@@ -5,9 +5,14 @@ import re
 from .config import TRANSPORT_NEWLINE_TOKEN
 
 QUOTED_REPLY_HEADER_RE = re.compile(
-    r"^(?:on .+ wrote:|.+ yazdı:|-----+original message-----+)$",
+    r"^(?:on .+ wrote:|.+ yazdı:|-+original message-+|-+forwarded message-+)$",
     re.IGNORECASE,
 )
+THREAD_HEADER_RE = re.compile(
+    r"^(?P<name>from|gönderen|sent|gönderildi|date|tarih|to|kime|cc|subject|konu):\s*.+$",
+    re.IGNORECASE,
+)
+THREAD_START_HEADERS = {"from", "gönderen"}
 
 
 def sanitize(text):
@@ -38,12 +43,27 @@ def sanitize_content(text):
 
 def strip_quoted_reply(text):
     """Remove common quoted-reply lines before semantic date extraction."""
+    lines = (text or "").splitlines()
+
+    def starts_thread_header_block(index):
+        first = THREAD_HEADER_RE.match(lines[index].strip())
+        if first is None or first.group("name").casefold() not in THREAD_START_HEADERS:
+            return False
+        header_names = set()
+        for candidate in lines[index:index + 7]:
+            match = THREAD_HEADER_RE.match(candidate.strip())
+            if match is not None:
+                header_names.add(match.group("name").casefold())
+        return len(header_names) >= 2
+
     kept_lines = []
-    for line in (text or "").splitlines():
+    for index, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith(">"):
             continue
         if kept_lines and QUOTED_REPLY_HEADER_RE.match(stripped):
+            break
+        if kept_lines and starts_thread_header_block(index):
             break
         kept_lines.append(line)
     return "\n".join(kept_lines).strip()

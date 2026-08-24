@@ -8,6 +8,7 @@ Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 günde
 
 - Türkçe ve İngilizce toplantı ifadelerini, tarihleri ve saatleri algılar.
 - Önce gerçek iCalendar/ICS verisini parse eder; ICS yoksa semantic metin parser'ına düşer.
+- Semantic fallback adaylarını ikinci bir bağlam kontrolünden geçirir: açık toplantı konusu tüm-gün kaydı destekleyebilir; yalnızca gövdeden gelen adaylarda toplantı ifadesi, tarih ve saatin yakın olması gerekir. Mail zinciri başlıkları ve dağınık rapor tarihleri toplantı sayılmaz.
 - `Bugün` ve `yarın` gibi göreli ifadeleri mesajın alındığı tarihe göre yorumlar.
 - Haftanın günlerini çıplak (`Cuma`) veya `bu/önümüzdeki` ve `this/next` gibi göreli ifadelerle gelecek uygun tarihe çözer.
 - Yıl içermeyen tarihlerde, tarih hedef günden en az 60 gün geçmişse bir sonraki yıl değerlendirilir; örneğin 20 Aralık'ta geçen `5 Ocak`, 5 Ocak 2027 kabul edilir.
@@ -76,7 +77,7 @@ daily / upcoming Telegram digest
 
 Kod akışı katmanlıdır: `sources` Mail erişimini, `parsing` toplantı çıkarımını, `services` iş kurallarını, `delivery` Telegram gönderimini ve `cli` çalışma akışını taşır. Böylece tarih/ICS parser değişiklikleri Telegram gönderim koduna dokunmadan test edilebilir.
 
-Canonical `Meeting` modeli şu alanları taşır: `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id` ve `confidence`. ICS toplantıları `confidence=1.0` ile gelir; semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir.
+Canonical `Meeting` modeli şu alanları taşır: `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id` ve `confidence`. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır.
 
 `STATUS:CANCELLED` veya `METHOD:CANCEL` olan ICS etkinlikleri listeye alınmaz. Aynı `UID` için daha yüksek `SEQUENCE` değerine sahip kayıt geçerli kabul edilir; böylece tarih değişikliği ve iptal mailleri eski daveti bastırır. Semantic metinde `iptal`, `ertelendi/rescheduled` ve `tentative` durumları da sınıflandırılır. `DTSTART;TZID=...`, UTC (`Z`) ve tarih-only ICS değerleri desteklenir; UTC zamanları Telegram özeti için Europe/Istanbul saatine çevrilir.
 

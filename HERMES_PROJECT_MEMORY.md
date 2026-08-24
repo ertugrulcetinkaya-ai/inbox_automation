@@ -13,6 +13,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - Messages received in the last 30 days are inspected; read status does not matter.
 - Likely meeting/calendar messages are parsed for Turkish and English date/time formats.
 - ICS-first parsing is mandatory: parse inline `VCALENDAR/VEVENT` and MIME `text/calendar`/`.ics` parts before semantic text fallback.
+- Non-ICS semantic candidates require a second deterministic context review. A strong meeting subject may support an all-day event; body-only candidates require a nearby meeting expression, date, and time. Quoted `From/Sent/Subject` thread blocks and unrelated report dates must not become meetings. Verified low-confidence meetings remain visible in the attention output rather than being silently filtered.
 - The canonical `Meeting` fields are `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id`, and `confidence`.
 - Meeting status is normalized to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; `STATUS:CANCELLED` and `METHOD:CANCEL` must suppress the event.
 - For the same ICS `UID`, the highest `SEQUENCE` wins. Semantic reschedule messages must keep the new date and discard the old date.
