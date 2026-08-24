@@ -12,24 +12,32 @@ Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 günde
 - Haftanın günlerini çıplak (`Cuma`) veya `bu/önümüzdeki` ve `this/next` gibi göreli ifadelerle gelecek uygun tarihe çözer.
 - Yıl içermeyen tarihlerde, tarih hedef günden en az 60 gün geçmişse bir sonraki yıl değerlendirilir; örneğin 20 Aralık'ta geçen `5 Ocak`, 5 Ocak 2027 kabul edilir.
 - Her gün saat 08:00'de o gün yapılacak toplantıları Telegram'a gönderir.
+- Varsayılan olarak toplantıdan 15 dakika önce konu, saat, yer ve katılım bağlantısını Telegram'a hatırlatır.
 - O gün toplantı yoksa `Bugün toplantı yok.` mesajını gönderir.
 - Gelecek toplantıları bugünden başlayarak listeleyebilir.
+- Bugün dâhil 7 günlük görünümü günlere göre gruplar; çakışmaları ve 15 dakikadan kısa araları işaretler.
+- Ertelenmiş, kesinleşmemiş veya düşük güvenle metinden çıkarılmış toplantıları ayrı bir `Dikkat gerektirenler` bölümünde gösterir.
 - LLM kullanmadan, deterministik tarih/saat ayrıştırması yapar.
 
 ## Telegram komutları
 
-Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
+Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan kullanılabilir. Üretimde Hermes Gateway botun sahibi olduğundan, yeni komutların `company_reporting_hub` köprüsünde de eşlenip iki repository birlikte deploy edilmelidir:
 
 | Amaç | Türkçe komutlar | ASCII eşdeğerleri |
 |---|---|---|
 | Bugünün toplantıları | `/bugün`, `/toplantılar` | `/bugun`, `/toplantilar` |
 | Bugün ve sonraki toplantılar | `/gelecek_toplantılar`, `/toplantılar_gelecek`, `/sonraki_toplantılar` | `/gelecek_toplantilar`, `/toplantilar_gelecek`, `/sonraki_toplantilar` |
+| Bugün dâhil 7 günlük görünüm | `/hafta`, `/haftalık` | `/haftalik`, `/week` |
+| Dikkat gerektiren toplantılar | `/dikkat` | `/attention` |
 | Servis durumu | `/durum` | `/status` |
 
 İleri tarihli listeyi yerel olarak kontrol etmek için:
 
 ```bash
 .venv/bin/python main.py --upcoming --dry-run
+.venv/bin/python main.py --week --dry-run
+.venv/bin/python main.py --attention --dry-run
+.venv/bin/python main.py --reminder --dry-run
 ```
 
 ## Mimari
@@ -41,6 +49,7 @@ Hermes Gateway aktifken aşağıdaki komutlar Telegram'da kullanılabilir:
 - `mail_digest/sources/gmail/`: Gmail OAuth, salt-okunur API, MIME normalizasyonu, SQLite cache ve history senkronizasyon katmanıdır.
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
+- `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları yalnızca hash kimlikleriyle kaydederek aynı toplantı için tekrar bildirim gönderilmesini önler.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
 - `mail_digest/delivery/telegram.py`: yalnızca Telegram gönderim katmanını içerir; parser katmanına bağımlı değildir.
 - `mail_digest/cli.py`: günlük digest CLI akışını ve ortak kilitli `run_digest()` servis çağrısını yönetir.
@@ -78,6 +87,8 @@ Haftanın günü ifadeleri mesajın alındığı tarihe göre çözülür. `Cuma
 AppleScript JSON üretmez; güvenli `__MAIL_DIGEST_FIELD__` ayırıcısını kullanır. Temizleme ve ayrıştırma Python tarafında yapılır. Böylece e-posta içindeki tırnak, ters bölü ve kontrol karakterleri Telegram çıktısını bozmaz.
 
 ## Kurulum ve yerel kullanım
+
+Desteklenen bir Python 3.11 veya daha yeni sürüm kullanın.
 
 Telegram bilgileri `~/.hermes_local_automation/telegram.env` dosyasında tutulur:
 
@@ -124,6 +135,8 @@ Production transport Gmail'dir: `MAIL_SOURCE=gmail` kullanın. Gmail hatasında 
 .venv/bin/python scripts/install_launchd.py --mail-source gmail
 ```
 
+Komut günlük özet ile 5 dakikada bir çalışan hatırlatma görevini birlikte önizler. Hatırlatma süresini örneğin 30 dakikaya çıkarmak için `--reminder-minutes 30` kullanın. `--install` yalnızca plist dosyalarını yazar; servisleri yüklemez veya yeniden başlatmaz. Hatırlatma modu, gönderilecek toplantı yoksa Telegram'a mesaj göndermez. Başarılı gönderimlerin hash kimlikleri varsayılan olarak `~/.hermes_local_automation/mail_digest/reminders.json` altında saklanır; başlık ve gönderen gibi özel bilgiler bu dosyaya düz metin olarak yazılmaz.
+
 Komut varsayılan olarak yalnızca preview üretir; gerçek production job bu repository değişikliğiyle Gmail'e çevrilmez.
 
 Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail` ile yeniden üretip doğrulayın. Apple Mail rollback'inin bilinen performans sınırlaması vardır: nötr konulu toplantıları kaçırmamak için 30 günlük penceredeki her mesajın gövdesini okumaya çalışır; geçmiş yerel doğrulamalarda bu yol 180 saniyeyi aşmıştır. Rollback geçici bir işletim prosedürüdür; Apple Mail Issue-2 davranışı Gmail yolunun yerine kalıcı production kaynağı değildir.
@@ -137,6 +150,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Mac Mini tek runtime/production makinesidir.
 - Company Reporting/Hermes aynı Telegram botunu yönetirken bağımsız `telegram_listener.py` çalıştırılmaz; ikinci Telegram polling süreci oluşturulmaz.
 - 08:00 launchd çalışması ile Telegram komutu aynı `run_digest()` akışını kullanır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Dosyanın diskte kalması stale-lock oluşturmaz.
+- Beş dakikalık hatırlatma görevi de aynı `run_digest()` ve `flock` akışını kullanır; günlük özet veya Telegram komutuyla çakışırsa güvenli biçimde o turu atlar.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
 - Mac Mini deploy'u `company_reporting_hub/scripts/deploy_mac_mini.sh` ile yapılır.
 

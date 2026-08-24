@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = Path(
@@ -27,6 +28,15 @@ APPLE_SCRIPT_TIMEOUT_SECONDS = 180
 DIGEST_LOCK_FILE = Path(
     os.environ.get("MAIL_DIGEST_LOCK_FILE", "/tmp/mail_unread_digest.lock")
 ).expanduser()
+REMINDER_STATE_FILE = Path(
+    os.environ.get(
+        "MEETING_REMINDER_STATE_FILE",
+        str(Path.home() / ".hermes_local_automation" / "mail_digest" / "reminders.json"),
+    )
+).expanduser()
+REMINDER_MINUTES_DEFAULT = 15
+REMINDER_WINDOW_MINUTES_DEFAULT = 5
+ATTENTION_CONFIDENCE_THRESHOLD = 0.80
 MAIL_SOURCE_DEFAULT = "apple_mail"
 GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
 GMAIL_DATA_DIR = Path.home() / ".hermes_local_automation" / "gmail"
@@ -89,7 +99,7 @@ MONTHS.update({
 MEETING_KEYWORDS = (
     "toplantı", "toplanti", "meeting", "appointment", "randevu", "görüşme",
     "gorusme", "etkinlik", "event", "conference", "konferans", "seminar",
-    "seminar", "webinar", "interview", "mülakat", "mulakat", "invitation",
+    "webinar", "interview", "mülakat", "mulakat", "invitation",
     "invite", "invited", "calendar", "takvim", "davetiye", "schedule",
     "planlama", "zoom", "webex", "google meet", "microsoft teams",
 )
@@ -129,13 +139,51 @@ def log(message):
     print(f"[{timestamp}] {message}", flush=True)
 
 
-def load_env():
+def local_now():
+    """Return the configured digest timezone as a naive local datetime."""
+
+    return datetime.now(ZoneInfo(LOCAL_TIMEZONE_NAME)).replace(tzinfo=None)
+
+
+def load_env(env_file=None):
+    """Load the Telegram environment file without exposing its contents."""
+
+    env_path = Path(env_file or ENV_FILE).expanduser()
     env = {}
-    if not ENV_FILE.exists():
-        raise FileNotFoundError(f"Env file not found at {ENV_FILE}")
-    with open(ENV_FILE, "r") as handle:
-        for line in handle:
-            if "=" in line and not line.startswith("#"):
-                key, value = line.strip().split("=", 1)
-                env[key] = value.strip("'\"")
+    if not env_path.is_file():
+        raise FileNotFoundError(f"Env file not found at {env_path}")
+    with env_path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            env[key] = value.strip().strip("'\"")
     return env
+
+
+def _positive_int_env(name, default):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def reminder_minutes():
+    return _positive_int_env("MEETING_REMINDER_MINUTES", REMINDER_MINUTES_DEFAULT)
+
+
+def reminder_window_minutes():
+    return _positive_int_env(
+        "MEETING_REMINDER_WINDOW_MINUTES",
+        REMINDER_WINDOW_MINUTES_DEFAULT,
+    )

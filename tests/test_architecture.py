@@ -14,6 +14,18 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIs(main.Meeting, Meeting)
         self.assertIs(main.extract_meetings, extract_meetings)
 
+    def test_shared_configuration_has_no_duplicate_keywords(self):
+        from mail_digest.config import MEETING_KEYWORDS
+
+        self.assertEqual(len(MEETING_KEYWORDS), len(set(MEETING_KEYWORDS)))
+
+    def test_listener_reuses_shared_environment_loader(self):
+        project_root = Path(main.__file__).parent
+        listener = (project_root / "telegram_listener.py").read_text(encoding="utf-8")
+
+        self.assertIn("from mail_digest.config import load_env", listener)
+        self.assertNotIn("def load_env(", listener)
+
     def _applescript_source(self):
         script_path = Path(main.__file__).parent / "mail_fetcher.applescript"
         raw = script_path.read_text(encoding="utf-8")

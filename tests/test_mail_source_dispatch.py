@@ -60,6 +60,11 @@ class GmailReadOnlyArchitectureTests(unittest.TestCase):
         self.assertIn("GMAIL_CREDENTIALS_FILE", rendered)
         self.assertNotIn("__GMAIL_", rendered)
 
+        reminder = render_template(TEMPLATES["reminder"], reminder_minutes=30).decode()
+        self.assertIn("<string>--reminder</string>", reminder)
+        self.assertIn("<string>30</string>", reminder)
+        self.assertIn("<integer>300</integer>", reminder)
+
 
 if __name__ == "__main__":
     unittest.main()

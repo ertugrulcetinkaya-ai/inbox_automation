@@ -1,11 +1,45 @@
 import subprocess
 import signal
+import io
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from main import FIELD_DELIMITER
+from mail_digest.config import load_env
 from mail_digest.delivery.telegram import send_telegram
 from mail_digest.sources.apple_mail import fetch_mail
+from telegram_listener import send_message as listener_send_message
+
+
+class EnvironmentLoaderTests(unittest.TestCase):
+    def test_loader_ignores_comments_malformed_lines_and_empty_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "telegram.env"
+            path.write_text(
+                "  # comment\n"
+                "TELEGRAM_BOT_TOKEN = 'fixture-token'\n"
+                "malformed\n"
+                " = ignored\n"
+                'TELEGRAM_CHAT_ID="fixture-chat"\n',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                load_env(path),
+                {
+                    "TELEGRAM_BOT_TOKEN": "fixture-token",
+                    "TELEGRAM_CHAT_ID": "fixture-chat",
+                },
+            )
+
+    def test_missing_env_file_error_contains_only_the_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing.env"
+            with self.assertRaisesRegex(FileNotFoundError, "missing.env"):
+                load_env(path)
 
 
 class AppleMailSourceFailureTests(unittest.TestCase):
@@ -129,6 +163,48 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
 
         self.assertTrue(send_telegram("x" * 7001))
         self.assertEqual(post.call_count, 3)
+
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_network_error_redacts_bot_token(self, load_env, post):
+        token = self.env["TELEGRAM_BOT_TOKEN"]
+        load_env.return_value = self.env
+        post.side_effect = RuntimeError(f"request failed for bot{token}/sendMessage")
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            self.assertFalse(send_telegram("test"))
+
+        self.assertNotIn(token, output.getvalue())
+        self.assertIn("[REDACTED]", output.getvalue())
+
+
+class TelegramListenerDeliveryFailureTests(unittest.TestCase):
+    @patch("telegram_listener.requests.post")
+    def test_http_or_telegram_error_is_failure(self, post):
+        post.return_value = Mock(status_code=500)
+        self.assertFalse(listener_send_message("fixture-token", "fixture-chat", "test"))
+
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": False})
+        self.assertFalse(listener_send_message("fixture-token", "fixture-chat", "test"))
+
+    @patch("telegram_listener.requests.post")
+    def test_successful_response_is_success(self, post):
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+
+        self.assertTrue(listener_send_message("fixture-token", "fixture-chat", "test"))
+
+    @patch("telegram_listener.requests.post")
+    def test_network_error_redacts_bot_token(self, post):
+        token = "fixture-secret-token"
+        post.side_effect = RuntimeError(f"request failed for bot{token}/sendMessage")
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            self.assertFalse(listener_send_message(token, "fixture-chat", "test"))
+
+        self.assertNotIn(token, output.getvalue())
+        self.assertIn("[REDACTED]", output.getvalue())
 
 
 if __name__ == "__main__":

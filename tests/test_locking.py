@@ -76,6 +76,22 @@ except DigestAlreadyRunning:
         with patch.object(sys, "argv", ["main.py"]):
             self.assertEqual(main(), 0)
 
+    @patch("mail_digest.cli.run_digest", return_value=0)
+    def test_cli_routes_week_attention_and_reminder_modes(self, run):
+        for flag, mode in (
+            ("--week", "weekly"),
+            ("--attention", "attention"),
+            ("--reminder", "reminder"),
+        ):
+            with self.subTest(flag=flag), patch.object(
+                sys,
+                "argv",
+                ["main.py", flag, "--dry-run"],
+            ):
+                self.assertEqual(main(), 0)
+                run.assert_called_once_with(dry_run=True, mode=mode)
+                run.reset_mock()
+
 
 class TelegramListenerLockIntegrationTests(unittest.TestCase):
     @patch("telegram_listener.execute_digest", return_value=0)
@@ -91,6 +107,17 @@ class TelegramListenerLockIntegrationTests(unittest.TestCase):
 
         self.assertIn("hazırlanıyor", listener_run_digest())
         execute.assert_called_once_with(upcoming=False)
+
+    @patch("telegram_listener.execute_digest", return_value=0)
+    def test_listener_routes_weekly_and_attention_modes_through_shared_service(self, execute):
+        from telegram_listener import run_digest as listener_run_digest
+
+        self.assertIn("Haftalık", listener_run_digest(mode="weekly"))
+        execute.assert_called_once_with(mode="weekly")
+
+        execute.reset_mock()
+        self.assertIn("Dikkat", listener_run_digest(mode="attention"))
+        execute.assert_called_once_with(mode="attention")
 
 
 if __name__ == "__main__":

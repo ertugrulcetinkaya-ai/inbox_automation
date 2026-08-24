@@ -23,6 +23,9 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - Yearless dates use the target year first; when that candidate is at least 60 days in the past, the next-year candidate is evaluated. For example, `5 Ocak` on 20 December resolves to 5 January of the following year, while a recent past date stays in the current year.
 - Relative phrases such as "bugün" and "yarın" are anchored to the message received date.
 - The daily output contains meetings scheduled for the current day. If none are found, it sends "Bugün toplantı yok."
+- A weekly mode covers today plus the following six days, grouped by weekday. It marks overlapping timed meetings and gaps shorter than 15 minutes.
+- Daily, upcoming, and weekly renderers separate `RESCHEDULED`, `TENTATIVE`, and confidence-below-0.80 meetings into a `Dikkat gerektirenler` section. `/dikkat` renders only that upcoming subset. Cancelled meetings remain suppressed everywhere.
+- The reminder mode checks a configurable lead time (15 minutes by default) in a five-minute scheduler window, skips all-day events, and sends subject/time/location/join URL. Only successful sends are deduplicated. The state file stores hashed occurrence identities rather than private meeting text.
 - `main.py` is a thin backward-compatible facade. The implementation is split under `mail_digest/`: `sources/apple_mail.py`, `parsing/`, `services/meeting_service.py`, `delivery/telegram.py`, and `cli.py`.
 - Parsing layers must not import Telegram delivery or require network credentials; this keeps date/ICS changes independently testable.
 - Tests include a 50-case parser matrix, 20 sanitized fixtures, ICS aggregation regressions, and AppleScript/Telegram failure-path coverage. Do not add real mailbox contents, credentials, or personal identifiers to fixtures.
@@ -50,13 +53,14 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - SECURITY: Do not print or expose the Telegram bot token.
 - `mail_digest/cli.py`: Sends the daily meeting digest; `main.py` delegates to it for launchd compatibility.
 - `mail_digest/services/lock.py`: Owns the shared non-blocking `fcntl.flock()` lock at `/tmp/mail_unread_digest.lock`; both launchd and Telegram command execution must use `mail_digest.cli.run_digest()`.
-- `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, and `/durum`; ASCII aliases remain supported. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
+- `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, `/hafta`/`/haftalik`/`/haftalık`/`/week`, `/dikkat`/`/attention`, and `/durum`; ASCII aliases remain supported. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
 
 ## Automation (launchd)
 - `launchd/*.plist.template`: Machine-independent launchd templates.
 - `scripts/install_launchd.py`: Renders templates using the current checkout and user paths.
 - The summary agent runs daily at 08:00. The standalone listener is optional and must not share a Telegram bot with Hermes Gateway.
-- The 08:00 launchd invocation and Telegram commands share the same `run_digest()` lock. Do not use `exists()`/`touch()` checks or unlink the lock file; `flock` releases automatically after normal exit, exceptions, and process termination.
+- The reminder agent runs every five minutes and calls `main.py --reminder`; `MEETING_REMINDER_MINUTES` defaults to 15 and `MEETING_REMINDER_WINDOW_MINUTES` defaults to 5.
+- The 08:00 launchd invocation, reminder invocation, and Telegram commands share the same `run_digest()` lock. Do not use `exists()`/`touch()` checks or unlink the lock file; `flock` releases automatically after normal exit, exceptions, and process termination.
 - `logs/`: Contains output and error logs.
 
 ## Operational Rules

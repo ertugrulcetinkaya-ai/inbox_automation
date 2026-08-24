@@ -19,6 +19,7 @@ LAUNCH_AGENTS_ROOT = Path.home() / "Library" / "LaunchAgents"
 
 TEMPLATES = {
     "summary": TEMPLATE_ROOT / "com.ertugrul.mail.unread.summary.plist.template",
+    "reminder": TEMPLATE_ROOT / "com.ertugrul.mail.meeting.reminder.plist.template",
     "listener": TEMPLATE_ROOT / "com.ertugrul.mail.unread.listener.plist.template",
 }
 
@@ -29,6 +30,7 @@ def render_template(
     gmail_credentials_file=None,
     gmail_token_file=None,
     gmail_cache_file=None,
+    reminder_minutes=15,
 ) -> bytes:
     gmail_root = Path.home() / ".hermes_local_automation" / "gmail"
     text = template_path.read_text(encoding="utf-8")
@@ -39,6 +41,7 @@ def render_template(
         "__GMAIL_CREDENTIALS_FILE__": str(gmail_credentials_file or gmail_root / "credentials.json"),
         "__GMAIL_TOKEN_FILE__": str(gmail_token_file or gmail_root / "token.json"),
         "__GMAIL_CACHE_FILE__": str(gmail_cache_file or gmail_root / "cache.sqlite3"),
+        "__MEETING_REMINDER_MINUTES__": str(reminder_minutes),
     }
     for marker, value in replacements.items():
         rendered = rendered.replace(marker, value)
@@ -64,13 +67,21 @@ def main() -> int:
     parser.add_argument("--gmail-token-file", type=Path)
     parser.add_argument("--gmail-cache-file", type=Path)
     parser.add_argument(
+        "--reminder-minutes",
+        type=int,
+        default=15,
+        help="Send meeting reminders this many minutes before start (default: 15)",
+    )
+    parser.add_argument(
         "--include-listener",
         action="store_true",
         help="Also install the standalone Telegram listener (avoid when Hermes Gateway owns the bot)",
     )
     args = parser.parse_args()
+    if args.reminder_minutes <= 0:
+        parser.error("--reminder-minutes must be a positive integer")
 
-    selected = ["summary"]
+    selected = ["summary", "reminder"]
     if args.include_listener:
         selected.append("listener")
 
@@ -81,6 +92,7 @@ def main() -> int:
             gmail_credentials_file=args.gmail_credentials_file,
             gmail_token_file=args.gmail_token_file,
             gmail_cache_file=args.gmail_cache_file,
+            reminder_minutes=args.reminder_minutes,
         )
         for key in selected
     }

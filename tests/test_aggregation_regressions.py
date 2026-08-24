@@ -45,6 +45,33 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
         self.assertNotIn("15 Ağustos 2026", digest)
         self.assertNotIn("18 Ağustos 2026", digest)
 
+    def test_scoped_digest_does_not_keep_old_date_when_new_sequence_moves_outside_range(self):
+        records = [
+            ics_record(sequence=0, start="20260815T100000"),
+            ics_record(sequence=1, start="20260820T100000"),
+        ]
+
+        daily = format_digest(records, date(2026, 8, 15))
+
+        self.assertIn("Bugün toplantı yok.", daily)
+        self.assertNotIn("Aynı toplantı", daily)
+
+    def test_scoped_digest_does_not_keep_old_semantic_date_after_reschedule(self):
+        original = {
+            "sender": "Fixture Organizer <organizer@example.com>",
+            "subject": "Satış toplantısı",
+            "content": "15 Ağustos 2026 saat 10:00 toplantısı yapılacaktır.",
+        }
+        rescheduled = {
+            **original,
+            "content": "15 Ağustos toplantımız 20 Ağustos 14:00'e ertelendi.",
+        }
+
+        daily = format_digest([original, rescheduled], date(2026, 8, 15))
+
+        self.assertIn("Bugün toplantı yok.", daily)
+        self.assertNotIn("Satış toplantısı", daily)
+
     def test_equal_sequence_cancel_wins_over_duplicate_confirmation(self):
         confirmed = ics_record(sequence=3, start="20260815T100000")
         cancelled = ics_record(sequence=3, start="20260815T100000", status="CANCELLED")

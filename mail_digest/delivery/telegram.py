@@ -36,6 +36,7 @@ def send_telegram(message):
                 log(f"Telegram Error (Chunk {index + 1}/{len(chunks)}): invalid response")
                 success = False
         except Exception as exc:
-            log(f"Network error sending chunk {index + 1}: {exc}")
+            safe_error = str(exc).replace(token, "[REDACTED]")
+            log(f"Network error sending chunk {index + 1}: {safe_error}")
             success = False
     return success

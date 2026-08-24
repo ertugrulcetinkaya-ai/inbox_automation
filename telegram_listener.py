@@ -5,7 +5,6 @@ import warnings
 import sys
 import asyncio
 from pathlib import Path
-from datetime import datetime
 
 # Suppress urllib3 NotOpenSSLWarning
 try:
@@ -14,13 +13,6 @@ try:
 except ImportError:
     pass
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-ENV_FILE = Path(
-    os.environ.get(
-        "TELEGRAM_ENV_FILE",
-        str(Path.home() / ".hermes_local_automation/telegram.env"),
-    )
-).expanduser()
 COMPANY_REPORT_ROOT = Path(
     os.environ.get(
         "COMPANY_REPORT_ROOT",
@@ -31,26 +23,29 @@ if str(COMPANY_REPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(COMPANY_REPORT_ROOT))
 
 from mail_digest.cli import run_digest as execute_digest
+from mail_digest.config import load_env
 from mail_digest.services.lock import DigestAlreadyRunning
-
-def load_env():
-    env = {}
-    if not ENV_FILE.exists():
-        raise FileNotFoundError(f"Env file not found at {ENV_FILE}")
-    with open(ENV_FILE, "r") as f:
-        for line in f:
-            if "=" in line and not line.startswith("#"):
-                k, v = line.strip().split("=", 1)
-                env[k] = v.strip("'\"")
-    return env
 
 def send_message(token, chat_id, text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
     try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Error sending Telegram message: {e}")
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"Error sending Telegram message: HTTP {response.status_code}")
+            return False
+        try:
+            response_payload = response.json()
+        except (AttributeError, ValueError):
+            response_payload = None
+        if not isinstance(response_payload, dict) or response_payload.get("ok") is not True:
+            print("Error sending Telegram message: invalid response")
+            return False
+        return True
+    except Exception as exc:
+        safe_error = str(exc).replace(token, "[REDACTED]")
+        print(f"Error sending Telegram message: {safe_error}")
+        return False
 
 def run_company_report_command(text):
     try:
@@ -84,9 +79,12 @@ def run_prepare_report_session():
     except Exception as e:
         return f"SYS oturumu hazırlanamadi: {str(e)[:200] or 'unknown error'}"
 
-def run_digest(upcoming=False):
+def run_digest(upcoming=False, mode=None):
     try:
-        exit_code = execute_digest(upcoming=upcoming)
+        if mode is None:
+            exit_code = execute_digest(upcoming=upcoming)
+        else:
+            exit_code = execute_digest(mode=mode)
     except DigestAlreadyRunning:
         return "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin."
     except Exception as exc:
@@ -95,6 +93,10 @@ def run_digest(upcoming=False):
     if exit_code != 0:
         return f"Özet çalıştırılamadı (çıkış kodu: {exit_code})."
 
+    if mode == "weekly":
+        return "Haftalık toplantı özeti Telegram sohbetinize gönderildi."
+    if mode == "attention":
+        return "Dikkat gerektiren toplantılar Telegram sohbetinize gönderildi."
     if upcoming:
         return "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi."
     return "Bugünün toplantı özeti Telegram sohbetinize gönderildi."
@@ -133,19 +135,19 @@ def main():
                         continue
 
                     normalized = (text or "").strip().lower().lstrip("/")
-                    if normalized in {"komutlar", "help", "/komutlar", "/help"} or normalized.startswith(("servis", "fatura")):
+                    if normalized in {"komutlar", "help"} or normalized.startswith(("servis", "fatura")):
                         registry_result = run_company_report_command(text)
                         if isinstance(registry_result, str):
                             send_message(token, chat_id, registry_result)
-                        elif isinstance(registry_result, dict) and registry_result.get("response") and normalized in {"komutlar", "help", "/komutlar", "/help"}:
+                        elif isinstance(registry_result, dict) and registry_result.get("response") and normalized in {"komutlar", "help"}:
                             send_message(token, chat_id, registry_result["response"])
                         continue
 
-                    if normalized in {"session", "/session", "sys_session", "/sys_session"}:
+                    if normalized in {"session", "sys_session"}:
                         send_message(token, chat_id, run_report_session_status())
                         continue
 
-                    if normalized in {"session_hazirla", "/session_hazirla"}:
+                    if normalized == "session_hazirla":
                         send_message(token, chat_id, "SYS oturumu hazırlanıyor. MFA tamamlayın.")
                         send_message(token, chat_id, run_prepare_report_session())
                         continue
@@ -167,9 +169,21 @@ def main():
                         print("Command received: /gelecek_toplantilar")
                         result = run_digest(upcoming=True)
                         send_message(token, chat_id, result)
+                    elif command in {"/hafta", "/haftalik", "/haftalık", "/week"}:
+                        print("Command received: /hafta")
+                        result = run_digest(mode="weekly")
+                        send_message(token, chat_id, result)
+                    elif command in {"/dikkat", "/attention"}:
+                        print("Command received: /dikkat")
+                        result = run_digest(mode="attention")
+                        send_message(token, chat_id, result)
                     elif command in {"/durum", "/status"}:
                         print("Command received: /durum")
-                        send_message(token, chat_id, "✅ Günlük toplantı özeti listener'ı çalışıyor.")
+                        send_message(
+                            token,
+                            chat_id,
+                            "✅ Toplantı özeti listener'ı ve hatırlatma desteği çalışıyor.",
+                        )
                     
             except Exception as e:
                 safe_error = str(e).replace(token, "[REDACTED]")

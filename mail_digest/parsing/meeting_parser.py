@@ -53,11 +53,14 @@ def _meeting_to_digest_record(meeting, position=0, date_override=None):
     if isinstance(start_at, datetime):
         label = start_at.strftime("%H:%M")
         sort_minutes = start_at.hour * 60 + start_at.minute
+        end_sort_minutes = None
         if isinstance(end_at, datetime) and end_at.date() == start_at.date():
             label = f"{label}–{end_at.strftime('%H:%M')}"
+            end_sort_minutes = end_at.hour * 60 + end_at.minute
     else:
         label = "Tüm gün"
         sort_minutes = 24 * 60
+        end_sort_minutes = None
 
     return {
         "subject": meeting.title,
@@ -65,6 +68,7 @@ def _meeting_to_digest_record(meeting, position=0, date_override=None):
         "date": _meeting_display_date(meeting) or date_override,
         "time": label,
         "sort_minutes": sort_minutes,
+        "end_sort_minutes": end_sort_minutes,
         "uid": meeting.uid,
         "organizer": meeting.organizer,
         "location": meeting.location,
@@ -148,7 +152,13 @@ def _semantic_meeting_from_date_hit(record, subject, text, date_hit, status):
     )
 
 
-def extract_meetings(record, start_date, end_date=None, include_cancelled=False):
+def extract_meetings(
+    record,
+    start_date,
+    end_date=None,
+    include_cancelled=False,
+    include_lifecycle_outside_range=False,
+):
     subject = record.get("subject", "")
     raw_content = record.get("content", record.get("snippet", ""))
     content = strip_quoted_reply(raw_content)
@@ -170,10 +180,11 @@ def extract_meetings(record, start_date, end_date=None, include_cancelled=False)
                         )
                     )
                 continue
-            if meeting_date is None or meeting_date < start_date:
-                continue
-            if end_date is not None and meeting_date > end_date:
-                continue
+            if not include_lifecycle_outside_range:
+                if meeting_date is None or meeting_date < start_date:
+                    continue
+                if end_date is not None and meeting_date > end_date:
+                    continue
             digest_records.append(_meeting_to_digest_record(meeting, position=index))
         return digest_records
 
@@ -183,11 +194,16 @@ def extract_meetings(record, start_date, end_date=None, include_cancelled=False)
     text = f"{subject}\n{content}"
     status = _semantic_status(text)
     date_hits = _date_hits(text, start_date, relative_date=received_date)
-    matching_dates = [
-        hit
-        for hit in _semantic_date_hits_for_status(text, date_hits, status)
-        if hit["date"] >= start_date and (end_date is None or hit["date"] <= end_date)
-    ]
+    lifecycle_date_hits = _semantic_date_hits_for_status(text, date_hits, status)
+    if include_lifecycle_outside_range and status == "RESCHEDULED":
+        matching_dates = lifecycle_date_hits
+    else:
+        matching_dates = [
+            hit
+            for hit in lifecycle_date_hits
+            if hit["date"] >= start_date
+            and (end_date is None or hit["date"] <= end_date)
+        ]
     if status == "CANCELLED" and include_cancelled and not matching_dates:
         if date_hits:
             matching_dates = [date_hits[0]]

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ertugrul.mail.meeting.reminder</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON_PATH__</string>
+        <string>__PROJECT_ROOT__/main.py</string>
+        <string>--reminder</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_ROOT__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MAIL_SOURCE</key>
+        <string>__MAIL_SOURCE__</string>
+        <key>GMAIL_CREDENTIALS_FILE</key>
+        <string>__GMAIL_CREDENTIALS_FILE__</string>
+        <key>GMAIL_TOKEN_FILE</key>
+        <string>__GMAIL_TOKEN_FILE__</string>
+        <key>GMAIL_CACHE_FILE</key>
+        <string>__GMAIL_CACHE_FILE__</string>
+        <key>MEETING_REMINDER_MINUTES</key>
+        <string>__MEETING_REMINDER_MINUTES__</string>
+        <key>MEETING_REMINDER_WINDOW_MINUTES</key>
+        <string>5</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>__PROJECT_ROOT__/logs/reminder_output.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_ROOT__/logs/reminder_error.log</string>
+</dict>
+</plist>
