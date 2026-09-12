@@ -12,6 +12,7 @@ from mail_digest.config import SecretFilePermissionError, load_env
 from mail_digest.delivery.telegram import send_telegram
 from mail_digest.sources.apple_mail import fetch_mail
 from telegram_listener import (
+    TelegramConfigurationError,
     _load_processed_update_ids,
     process_update,
     send_message as listener_send_message,
@@ -387,6 +388,30 @@ class TelegramUpdateStateTests(unittest.TestCase):
                     state_file=Path(directory) / "update_state.json",
                 )
             )
+
+        send.assert_not_called()
+
+    def test_group_without_allowed_user_id_fails_closed(self):
+        update = {
+            "update_id": 44,
+            "message": {
+                "chat": {"id": "fixture-group", "type": "supergroup"},
+                "from": {"id": 99},
+                "text": "/status",
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener.send_message"
+        ) as send:
+            with self.assertRaises(TelegramConfigurationError):
+                process_update(
+                    update,
+                    "fixture-token",
+                    "fixture-group",
+                    processed_update_ids=set(),
+                    state_file=Path(directory) / "update_state.json",
+                )
 
         send.assert_not_called()
 

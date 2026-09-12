@@ -1,0 +1,7 @@
+# Exact CI quality-tool versions. Runtime dependencies remain in
+# requirements.lock; update this file intentionally when the quality gate
+# changes.
+bandit==1.9.4
+pip-audit==2.10.1
+pyright==1.1.414
+ruff==0.16.7

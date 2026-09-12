@@ -134,6 +134,23 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
         self.assertIn("Bugün veya sonrasında toplantı yok.", digest)
         self.assertNotIn("Satış toplantısı", digest)
 
+    def test_neutral_subject_date_only_cancellation_suppresses_original_timed_meeting(self):
+        original = {
+            "sender": "Organizer <organizer@example.com>",
+            "subject": "Program değişikliği",
+            "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+        }
+        cancellation = {
+            "sender": "Calendar Service <organizer@example.com>",
+            "subject": "Program değişikliği",
+            "content": "15 Eylül 2026 tarihindeki toplantımız iptal edilmiştir.",
+        }
+
+        digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
+
+        self.assertIn("Bugün veya sonrasında toplantı yok.", digest)
+        self.assertNotIn("Program değişikliği", digest)
+
     def test_thread_cancellation_can_change_sender_and_subject(self):
         original = {
             "thread_id": "gmail-thread-1",

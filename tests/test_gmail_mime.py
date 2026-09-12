@@ -100,7 +100,10 @@ class GmailMimeTests(unittest.TestCase):
 
     def test_calendar_metadata_selectively_loads_raw(self):
         direct = self.normalize(message(payload(
-            parts=[payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR"))]
+            parts=[payload(
+                mime_type="text/calendar",
+                data=b64("BEGIN:VCALENDAR\nEND:VCALENDAR"),
+            )]
         )))
         self.assertTrue(direct["raw_source"])
         self.assertEqual(self.raw_calls, [])
@@ -117,7 +120,7 @@ class GmailMimeTests(unittest.TestCase):
 
         record = self.normalize(
             message(payload(parts=[part])),
-            {"calendar-1": {"data": b64("BEGIN:VCALENDAR")}},
+            {"calendar-1": {"data": b64("BEGIN:VCALENDAR\nEND:VCALENDAR")}},
         )
 
         self.assertIn("BEGIN:VCALENDAR", record["raw_source"])
@@ -279,6 +282,28 @@ class GmailMimeTests(unittest.TestCase):
         )
 
         self.assertIn("UID:direct", record["raw_source"])
+
+    @patch("mail_digest.sources.gmail.mime.MAX_ICS_BYTES", 220)
+    def test_multiple_calendar_parts_keep_only_complete_documents_within_total_limit(self):
+        padding = "x" * 95
+        first = (
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:first\n"
+            f"DESCRIPTION:{padding}\nEND:VEVENT\nEND:VCALENDAR"
+        )
+        second = (
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:second\n"
+            f"DESCRIPTION:{padding}\nEND:VEVENT\nEND:VCALENDAR"
+        )
+        root = payload(parts=[
+            payload(mime_type="text/calendar", data=b64(first)),
+            payload(mime_type="text/calendar", data=b64(second)),
+        ])
+
+        record = self.normalize(message(root))
+
+        self.assertIn("UID:first", record["raw_source"])
+        self.assertNotIn("UID:second", record["raw_source"])
+        self.assertTrue(record["raw_source"].endswith("END:VCALENDAR"))
 
     def test_critical_internal_date_or_labels_failure_aborts(self):
         for value in (

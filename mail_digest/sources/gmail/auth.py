@@ -40,7 +40,7 @@ def write_private_text(path: Path, text: str) -> None:
             pass
 
 
-def load_credentials(token_path: Path = None) -> Credentials:
+def load_credentials(token_path: Path | None = None) -> Credentials:
     """Load/refresh a token without ever starting an interactive flow."""
     token_path = Path(token_path or gmail_token_file()).expanduser()
     if not token_path.is_file():
@@ -71,7 +71,7 @@ def load_credentials(token_path: Path = None) -> Credentials:
         ) from exc
 
 
-def build_service(token_path: Path = None):
+def build_service(token_path: Path | None = None):
     credentials = load_credentials(token_path)
     http = httplib2.Http(timeout=GMAIL_HTTP_TIMEOUT_SECONDS)
     authorized_http = AuthorizedHttp(credentials, http=http)

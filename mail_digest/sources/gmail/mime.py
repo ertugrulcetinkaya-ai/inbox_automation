@@ -179,8 +179,37 @@ def _calendar_payloads_from_parts(parts, message_id, attachment_loader):
         except (KeyError, LookupError, MessageStructureError, TypeError, UnicodeError, ValueError):
             continue
         if payload:
-            payloads.append(payload)
+            payloads.extend(_complete_calendar_blocks(payload))
     return payloads
+
+
+def _complete_calendar_blocks(text):
+    """Return complete VCALENDAR documents without byte-truncating them."""
+
+    return [
+        match.group(0)
+        for match in re.finditer(
+            r"(?is)BEGIN:VCALENDAR.*?END:VCALENDAR", text or ""
+        )
+        if len(match.group(0).encode("utf-8")) <= MAX_ICS_BYTES
+    ]
+
+
+def _bounded_calendar_source(payloads):
+    """Join only complete calendar documents that fit the aggregate limit."""
+
+    selected = []
+    total_bytes = 0
+    for payload in payloads:
+        for block in _complete_calendar_blocks(payload):
+            block = sanitize_content(block)
+            block_bytes = len(block.encode("utf-8"))
+            separator_bytes = 1 if selected else 0
+            if total_bytes + separator_bytes + block_bytes > MAX_ICS_BYTES:
+                continue
+            selected.append(block)
+            total_bytes += separator_bytes + block_bytes
+    return "\n".join(selected)
 
 
 def _calendar_payloads_from_raw_source(raw_text):
@@ -199,27 +228,17 @@ def _calendar_payloads_from_raw_source(raw_text):
                 continue
             payload = part.get_payload(decode=True)
             if isinstance(payload, bytes):
-                if len(payload) > MAX_ICS_BYTES:
-                    continue
                 charset = part.get_content_charset() or "utf-8"
                 payload = payload.decode(charset, errors="replace")
             elif not isinstance(payload, str):
                 continue
-            payload = limit_utf8_bytes(payload, MAX_ICS_BYTES)
-            if payload:
-                payloads.append(payload)
+            payloads.extend(_complete_calendar_blocks(payload))
     if payloads:
         return payloads
 
     # Some providers return an ICS document without a MIME Content-Type. Keep
     # the line structure but discard surrounding plaintext/headers.
-    return [
-        limit_utf8_bytes(match.group(0), MAX_ICS_BYTES)
-        for match in re.finditer(
-            r"(?is)BEGIN:VCALENDAR.*?END:VCALENDAR", raw_text or ""
-        )
-        if match.group(0)
-    ]
+    return _complete_calendar_blocks(raw_text)
 
 
 def _received_date_text(headers, internal_date_ms):
@@ -300,8 +319,7 @@ def normalize_message(message, attachment_loader, raw_loader):
                     "utf-8", errors="replace"
                 )
                 calendar_payloads = _calendar_payloads_from_raw_source(raw_text)
-            raw_source = "\n".join(calendar_payloads)
-            raw_source = limit_utf8_bytes(sanitize_content(raw_source), MAX_ICS_BYTES)
+            raw_source = _bounded_calendar_source(calendar_payloads)
         except GmailApiError:
             raise
         except (KeyError, LookupError, MessageStructureError, TypeError, UnicodeError, ValueError):

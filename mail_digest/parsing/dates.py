@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from ..config import (
@@ -133,11 +134,18 @@ def _numeric_dot_token_kind_at(text, start):
     return _numeric_dot_token_kind(text, match)
 
 
-def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
+def _date_hits(
+    text: str,
+    target_date: date,
+    relative_date: date | None | object = _DEFAULT_RELATIVE_ANCHOR,
+):
     hits = []
 
-    if relative_date is _DEFAULT_RELATIVE_ANCHOR:
-        relative_date = target_date
+    relative_anchor = (
+        target_date
+        if relative_date is _DEFAULT_RELATIVE_ANCHOR
+        else cast(date | None, relative_date)
+    )
 
     def add_hit(match, year, month, day):
         if year is None:
@@ -187,19 +195,23 @@ def _date_hits(text, target_date, relative_date=_DEFAULT_RELATIVE_ANCHOR):
         add_hit(match, match.group("year"), month, day)
 
     for match in RELATIVE_DATE_RE.finditer(text):
-        if relative_date is None:
+        if relative_anchor is None:
             continue
         word = match.group(1).casefold()
-        resolved_date = relative_date + timedelta(days=1) if word in {"tomorrow", "yarın"} else relative_date
+        resolved_date = (
+            relative_anchor + timedelta(days=1)
+            if word in {"tomorrow", "yarın"}
+            else relative_anchor
+        )
         hits.append({"date": resolved_date, "start": match.start(), "end": match.end()})
 
     for match in WEEKDAY_RE.finditer(text):
-        if relative_date is None:
+        if relative_anchor is None:
             continue
         weekday = WEEKDAY_NAMES[match.group("weekday").casefold()]
         resolved_date = _resolve_weekday_date(
             weekday,
-            relative_date,
+            relative_anchor,
             match.group("prefix") or "",
         )
         hits.append({"date": resolved_date, "start": match.start(), "end": match.end()})

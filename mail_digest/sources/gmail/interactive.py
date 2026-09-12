@@ -8,7 +8,10 @@ from ...config import GMAIL_SCOPES, gmail_credentials_file, gmail_token_file
 from .auth import write_private_text
 
 
-def authorize_interactively(credentials_path: Path = None, token_path: Path = None) -> Path:
+def authorize_interactively(
+    credentials_path: Path | None = None,
+    token_path: Path | None = None,
+) -> Path:
     credentials_path = Path(credentials_path or gmail_credentials_file()).expanduser()
     token_path = Path(token_path or gmail_token_file()).expanduser()
     if not credentials_path.is_file():

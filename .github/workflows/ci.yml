@@ -27,12 +27,13 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements.lock
+            requirements.quality.lock
 
       - name: Install runtime and quality dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.lock
-          python -m pip install bandit pip-audit ruff
+          python -m pip install -r requirements.quality.lock
 
       - name: Compile Python sources
         run: python -m compileall -q main.py telegram_listener.py mail_digest tests
@@ -42,6 +43,12 @@ jobs:
 
       - name: Lint
         run: ruff check mail_digest main.py telegram_listener.py scripts tests
+
+      - name: Type check
+        run: pyright
+
+      - name: Validate patch whitespace
+        run: git diff --check
 
       - name: Static security checks
         # B108 is the mandated stable /tmp flock rendezvous path; B608 is

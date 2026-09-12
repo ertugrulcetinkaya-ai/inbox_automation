@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from email.utils import parseaddr
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now
@@ -43,7 +44,7 @@ def _status_label(status):
     }.get(status, "")
 
 
-def _collect_meetings(records, start_date, end_date=None):
+def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurrence]:
     meetings = []
     for record in records:
         meetings.extend(
@@ -355,8 +356,14 @@ def format_upcoming_digest(records, start_date=None):
     return _render_upcoming_digest(_collect_meetings(records, start_date))
 
 
-def _with_schedule_warnings(meetings, short_break_minutes=15):
-    annotated = [{**meeting, "schedule_warnings": []} for meeting in meetings]
+def _with_schedule_warnings(
+    meetings: list[MeetingOccurrence],
+    short_break_minutes=15,
+) -> list[MeetingOccurrence]:
+    annotated = [
+        cast(MeetingOccurrence, {**meeting, "schedule_warnings": []})
+        for meeting in meetings
+    ]
     by_date = {}
     for meeting in annotated:
         if meeting["sort_minutes"] < 24 * 60:
@@ -476,6 +483,8 @@ def due_reminder_meetings(
     due = []
     for meeting in meetings:
         if meeting["sort_minutes"] >= 24 * 60:
+            continue
+        if meeting["date"] is None:
             continue
         starts_at = datetime.combine(
             meeting["date"],

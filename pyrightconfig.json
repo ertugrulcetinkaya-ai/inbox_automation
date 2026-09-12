@@ -1,0 +1,12 @@
+{
+  "include": [
+    "mail_digest",
+    "main.py",
+    "telegram_listener.py",
+    "scripts"
+  ],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none"
+}

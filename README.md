@@ -96,9 +96,13 @@ Telegram bilgileri `~/.hermes_local_automation/telegram.env` dosyasında tutulur
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
-# Optional: restrict group commands to one Telegram user id.
+# Required for a group/supergroup; optional user restriction for a private chat.
 TELEGRAM_ALLOWED_USER_ID=your_user_id
 ```
+
+Listener, configured group veya supergroup için `TELEGRAM_ALLOWED_USER_ID` yoksa
+komutları fail-closed reddeder. Böylece gruptaki başka bir üye, özellikle
+Company Reporting komutlarını yanlışlıkla çalıştıramaz.
 
 Bu dosya yalnızca sahibi tarafından okunabilir olmalıdır:
 
@@ -150,7 +154,14 @@ Production transport Gmail'dir: `MAIL_SOURCE=gmail` kullanın. Gmail hatasında 
 
 Komut günlük özet ile 5 dakikada bir çalışan hatırlatma görevini birlikte önizler. Hatırlatma süresini örneğin 30 dakikaya çıkarmak için `--reminder-minutes 30` kullanın. `--install` yalnızca plist dosyalarını yazar; servisleri yüklemez veya yeniden başlatmaz. Hatırlatma modu, gönderilecek toplantı yoksa Telegram'a mesaj göndermez. Başarılı gönderimlerin hash kimlikleri ve son başarılı reminder taraması varsayılan olarak `~/.hermes_local_automation/mail_digest/reminders.json` altında saklanır; başlık ve gönderen gibi özel bilgiler bu dosyaya düz metin olarak yazılmaz.
 
-Gmail MIME gövdeleri bounded policy ile işlenir (`MAX_BODY_BYTES=256 KiB`, `MAX_RAW_MIME_BYTES=1 MiB`, `MAX_ICS_BYTES=256 KiB`). Cache'e full raw MIME yerine yalnızca ilgili calendar/ICS payload'ı yazılır; semantic fallback için gerekli gövde de aynı body sınırıyla tutulur.
+Gmail MIME gövdeleri bounded policy ile işlenir (`MAX_BODY_BYTES=256 KiB`, `MAX_RAW_MIME_BYTES=1 MiB`, `MAX_ICS_BYTES=256 KiB`). Cache'e full raw MIME yerine yalnızca ilgili calendar/ICS payload'ı yazılır; semantic fallback için gerekli gövde de aynı body sınırıyla tutulur. Birden fazla calendar payload'ında toplam sınır yalnızca bütünü sığan `VCALENDAR` bloklarını kabul eder; geçerli ICS byte ortasından kesilmez.
+
+Semantic body-only toplantılarda tarih ve saat birlikte aranır. Bunun istisnası,
+aynı tarih bağlamında açık toplantı ve iptal ifadesi bulunan date-only semantic
+cancellation'dır: eski davetin saati korunarak lifecycle eşleştirmesine bırakılır.
+ICS motoru ayrıca somut mailbox occurrence'larını işler; bir recurring master
+invite'tan `RRULE`/`RDATE`/`EXDATE` ile tüm gelecek occurrence'ları üretme garantisi
+v1 kapsamında yoktur.
 
 Komut varsayılan olarak yalnızca preview üretir; gerçek production job bu repository değişikliğiyle Gmail'e çevrilmez. Çok parçalı Telegram gönderiminde tüm parçalar başarılı olmadan reminder state ilerletilmez; Telegram'ın çoklu mesaj transaction'ı olmadığı için başarısız kısmi gönderimin daha sonraki denemede önceki parçaları tekrarlaması mümkündür.
 
@@ -174,6 +185,8 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 .venv/bin/python -m py_compile main.py telegram_listener.py mail_digest/**/*.py tests/*.py
+.venv/bin/pyright
+.venv/bin/ruff check mail_digest main.py telegram_listener.py scripts tests
 git diff --check
 ```
 

@@ -144,14 +144,16 @@ def _has_time_near_date(text, date_hit, time_hits=None):
     )
 
 
-def _passes_detailed_semantic_review(subject, text, date_hit, time_hits=None):
+def _passes_detailed_semantic_review(subject, text, date_hit, time_hits=None, status=None):
     """Confirm a non-ICS date is really tied to a meeting context.
 
     A strong meeting signal in the subject can support an all-day semantic
-    event. Body-only candidates are deliberately stricter: the date must have
-    both an explicit meeting phrase and a nearby time. This keeps report,
-    signature and quoted-thread dates out of the digest without hiding
-    low-confidence meetings that do pass the second review.
+    event. Body-only confirmed candidates are deliberately stricter: the date
+    must have both an explicit meeting phrase and a nearby time. A body-only
+    cancellation is different: an explicit cancellation expression tied to a
+    meeting and date is sufficient, because the old invitation may contain the
+    only available time. This keeps report, signature and quoted-thread dates
+    out of the digest without hiding lifecycle updates.
     """
 
     if _has_strong_subject_signal(subject):
@@ -162,6 +164,8 @@ def _passes_detailed_semantic_review(subject, text, date_hit, time_hits=None):
     has_meeting_context = bool(EXPLICIT_MEETING_CONTEXT_RE.search(context)) or any(
         marker in normalized_context for marker in CALENDAR_MARKERS
     )
+    if status == "CANCELLED":
+        return has_meeting_context and bool(SEMANTIC_CANCELLED_RE.search(context))
     return has_meeting_context and _has_time_near_date(text, date_hit, time_hits)
 
 
@@ -313,7 +317,7 @@ def extract_meetings(
     date_hits = [
         hit
         for hit in all_date_hits
-        if _passes_detailed_semantic_review(subject, text, hit, time_hits)
+        if _passes_detailed_semantic_review(subject, text, hit, time_hits, status=status)
     ]
     lifecycle_date_hits = _semantic_date_hits_for_status(text, date_hits, status)
     if include_lifecycle_outside_range and status == "RESCHEDULED":
@@ -371,6 +375,6 @@ def extract_meeting(record, target_date):
     meetings = extract_meetings(record, target_date, target_date)
     if not meetings:
         return None
-    meeting = min(meetings, key=lambda item: (item["sort_minutes"], item["_position"]))
+    meeting = min(meetings, key=lambda item: (item["sort_minutes"], item.get("_position", 0)))
     meeting.pop("_position", None)
     return meeting

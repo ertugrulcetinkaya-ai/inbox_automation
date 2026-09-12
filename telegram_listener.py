@@ -26,6 +26,23 @@ MAX_PROCESSED_UPDATE_IDS = 4096
 DEFAULT_UPDATE_STATE_FILE = (
     Path.home() / ".hermes_local_automation" / "telegram" / "update_state.json"
 )
+GROUP_CHAT_TYPES = {"group", "supergroup"}
+
+
+class TelegramConfigurationError(RuntimeError):
+    """The listener configuration is unsafe for the addressed chat type."""
+
+
+def _retry_delay_value(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        delay = float(value)
+    except ValueError:
+        return None
+    if delay < 0:
+        return None
+    return min(30.0, delay)
 
 
 def _retry_after(response):
@@ -39,25 +56,15 @@ def _retry_after(response):
     if isinstance(payload, dict):
         parameters = payload.get("parameters")
         if isinstance(parameters, dict):
-            value = parameters.get("retry_after")
-            try:
-                delay = float(value)
-            except (TypeError, ValueError):
-                delay = None
-            if delay is not None and delay >= 0:
-                return min(30.0, delay)
+            delay = _retry_delay_value(parameters.get("retry_after"))
+            if delay is not None:
+                return delay
 
     headers = getattr(response, "headers", {}) or {}
     value = None
     if hasattr(headers, "get"):
         value = headers.get("Retry-After") or headers.get("retry-after")
-    try:
-        delay = float(value)
-    except (TypeError, ValueError):
-        return None
-    if delay < 0:
-        return None
-    return min(30.0, delay)
+    return _retry_delay_value(value)
 
 
 def _listener_retry_delay(response, attempt):
@@ -248,10 +255,16 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
     chat_id_msg = str(chat.get("id"))
     text = msg.get("text", "")
 
-    # Only accept commands from the configured chat. If an operator also sets
-    # TELEGRAM_ALLOWED_USER_ID, group commands must come from that user too.
+    # Only accept commands from the configured chat. Group commands require an
+    # explicit operator identity; otherwise any member could invoke commands
+    # with external side effects through an accidentally shared chat.
     if chat_id_msg != str(chat_id):
         return
+    chat_type = str(chat.get("type") or "").casefold()
+    if chat_type in GROUP_CHAT_TYPES and not allowed_user_id:
+        raise TelegramConfigurationError(
+            "TELEGRAM_ALLOWED_USER_ID is required for group and supergroup chats"
+        )
     if allowed_user_id is not None:
         sender = msg.get("from") if isinstance(msg.get("from"), dict) else {}
         if str(sender.get("id")) != str(allowed_user_id):
@@ -345,7 +358,7 @@ def main():
         env = load_env()
         token = env.get("TELEGRAM_BOT_TOKEN")
         chat_id = env.get("TELEGRAM_CHAT_ID")
-        allowed_user_id = env.get("TELEGRAM_ALLOWED_USER_ID")
+        allowed_user_id = (env.get("TELEGRAM_ALLOWED_USER_ID") or "").strip() or None
         
         if not token or not chat_id:
             print("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in env file.")
@@ -385,7 +398,7 @@ def main():
                     # Confirm the update to Telegram only after dispatch and
                     # durable id persistence have completed.
                     offset = max(offset, update_id + 1)
-            except TelegramUpdateStateError as exc:
+            except (TelegramUpdateStateError, TelegramConfigurationError) as exc:
                 print(f"Fatal error in listener: {exc}")
                 return
             except Exception as e:
