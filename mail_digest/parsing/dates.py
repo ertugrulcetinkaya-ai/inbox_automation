@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
 
 from ..config import (
+    LOCAL_TIMEZONE_NAME,
     MONTHS,
     YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS,
 )
@@ -226,6 +228,6 @@ def parse_received_date(value):
     except (TypeError, ValueError, OverflowError):
         pass
 
-    fallback = datetime.now().date()
+    fallback = datetime.now(ZoneInfo(LOCAL_TIMEZONE_NAME)).date()
     explicit_hits = _date_hits(text, fallback, relative_date=None)
     return explicit_hits[0]["date"] if explicit_hits else None

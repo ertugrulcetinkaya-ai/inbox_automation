@@ -1,8 +1,10 @@
 """Shared transport and text-cleaning helpers."""
 
 import re
+from datetime import date, datetime, time as datetime_time
+from zoneinfo import ZoneInfo
 
-from .config import TRANSPORT_NEWLINE_TOKEN
+from .config import LOCAL_TIMEZONE_NAME, TRANSPORT_NEWLINE_TOKEN
 
 QUOTED_REPLY_HEADER_RE = re.compile(
     r"^(?:on .+ wrote:|.+ yazdı:|-+original message-+|-+forwarded message-+)$",
@@ -39,6 +41,72 @@ def sanitize_content(text):
     text = "".join(ch for ch in text if ord(ch) >= 32 or ch in "\n\t")
     text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
     return text.strip()
+
+
+def limit_utf8_bytes(text, maximum):
+    """Return text capped at ``maximum`` UTF-8 bytes without splitting a codepoint."""
+
+    text = text or ""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= maximum:
+        return text
+    return encoded[:maximum].decode("utf-8", errors="ignore").rstrip()
+
+
+def record_source_received_at(record):
+    """Return a comparable, timezone-aware source timestamp for a mail record.
+
+    Gmail records carry ``internal_date_ms``. Apple Mail records normally carry
+    a parsed ``received_date``. The helper keeps freshness resolution
+    independent from either transport while avoiding the sender-controlled
+    RFC ``Date`` header when Gmail metadata is available.
+    """
+
+    value = record.get("source_received_at")
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=ZoneInfo(LOCAL_TIMEZONE_NAME))
+        return value
+    if isinstance(value, date):
+        return datetime.combine(
+            value,
+            datetime_time.min,
+            tzinfo=ZoneInfo(LOCAL_TIMEZONE_NAME),
+        )
+
+    for key in ("internal_date_ms", "source_received_at_ms"):
+        raw_value = record.get(key)
+        if raw_value is None:
+            continue
+        try:
+            return datetime.fromtimestamp(
+                int(raw_value) / 1000,
+                ZoneInfo(LOCAL_TIMEZONE_NAME),
+            )
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+
+    received_date = record.get("received_date")
+    if isinstance(received_date, datetime):
+        if received_date.tzinfo is None:
+            return received_date.replace(tzinfo=ZoneInfo(LOCAL_TIMEZONE_NAME))
+        return received_date
+    if isinstance(received_date, date):
+        return datetime.combine(
+            received_date,
+            datetime_time.min,
+            tzinfo=ZoneInfo(LOCAL_TIMEZONE_NAME),
+        )
+    if isinstance(received_date, str):
+        try:
+            parsed = datetime.fromisoformat(received_date)
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=ZoneInfo(LOCAL_TIMEZONE_NAME))
+            return parsed
+    return None
 
 
 def strip_quoted_reply(text):

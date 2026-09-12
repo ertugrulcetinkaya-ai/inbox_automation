@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
-from ..config import ATTENTION_CONFIDENCE_THRESHOLD, local_now
+from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now
 from ..parsing.meeting_parser import extract_meetings
+from ..utils import record_source_received_at
 
 
 TR_OUTPUT_MONTHS = (
@@ -49,37 +51,98 @@ def _collect_meetings(records, start_date, end_date=None):
         "CANCELLED": 3,
     }
 
+    def text_key(value):
+        return re.sub(r"\W+", " ", (value or "").casefold()).strip()
+
     def subject_key(meeting):
-        return re.sub(r"\W+", " ", meeting["subject"].casefold()).strip()
+        return text_key(meeting.get("subject", ""))
+
+    def organizer_key(meeting):
+        return text_key(meeting.get("organizer") or meeting.get("sender", ""))
+
+    def occurrence_parts(meeting, start_at=None):
+        if isinstance(start_at, datetime):
+            return start_at.date(), start_at.hour * 60 + start_at.minute
+        if isinstance(start_at, date):
+            return start_at, 24 * 60
+        return meeting.get("date"), meeting.get("sort_minutes")
+
+    def semantic_identity(meeting, start_at=None, allow_date_only=False):
+        meeting_date, sort_minutes = occurrence_parts(meeting, start_at)
+        if meeting_date is None or sort_minutes is None:
+            return None
+        if (
+            allow_date_only
+            and isinstance(start_at, date)
+            and not isinstance(start_at, datetime)
+        ):
+            sort_minutes = None
+        return subject_key(meeting), organizer_key(meeting), meeting_date, sort_minutes
+
+    def event_key(meeting):
+        uid = meeting.get("uid", "")
+        recurrence_id = meeting.get("recurrence_id")
+        if isinstance(recurrence_id, (date, datetime)):
+            recurrence_id = recurrence_id.isoformat()
+        return uid, recurrence_id or ""
+
+    def freshness_key(meeting):
+        received_at = record_source_received_at(meeting)
+        if received_at is None:
+            return (0, 0.0)
+        return (1, received_at.timestamp())
 
     def should_replace(current, candidate):
         if candidate.get("sequence", 0) != current.get("sequence", 0):
             return candidate.get("sequence", 0) > current.get("sequence", 0)
-        return status_priority.get(candidate.get("status"), 0) >= status_priority.get(
-            current.get("status"), 0
-        )
+        candidate_priority = status_priority.get(candidate.get("status"), 0)
+        current_priority = status_priority.get(current.get("status"), 0)
+        if candidate_priority != current_priority:
+            return candidate_priority > current_priority
+        candidate_freshness = freshness_key(candidate)
+        current_freshness = freshness_key(current)
+        if candidate_freshness != current_freshness:
+            return candidate_freshness > current_freshness
+        # Equal timestamps are unusual, but a stable final tie-breaker keeps
+        # aggregation independent of Gmail's record ordering.
+        return candidate.get("source_message_id", "") > current.get("source_message_id", "")
 
-    latest_by_uid = {}
+    latest_by_event = {}
     without_uid = []
     for meeting in meetings:
         uid = meeting.get("uid", "")
         if not uid:
             without_uid.append(meeting)
             continue
-        current = latest_by_uid.get(uid)
+        key = event_key(meeting)
+        current = latest_by_event.get(key)
         if current is None or should_replace(current, meeting):
-            latest_by_uid[uid] = meeting
+            latest_by_event[key] = meeting
 
-    resolved = list(latest_by_uid.values()) + without_uid
-    cancelled_subjects = {
-        subject_key(meeting)
-        for meeting in resolved
+    resolved = list(latest_by_event.values()) + without_uid
+    # Semantic mail has no authoritative UID. Its lifecycle fallback is still
+    # occurrence-scoped: subject + organizer + date + start time. In
+    # particular, a cancellation must not hide a later recurring meeting with
+    # the same subject, and a reschedule must remove only its old occurrence.
+    cancelled_occurrences = {
+        identity
+        for meeting in without_uid
         if meeting.get("status") == "CANCELLED"
+        for identity in [semantic_identity(meeting)]
+        if identity is not None and identity[-1] < 24 * 60
     }
-    rescheduled_subjects = {
-        subject_key(meeting)
-        for meeting in resolved
+    rescheduled_occurrences = {
+        identity
+        for meeting in without_uid
         if meeting.get("status") == "RESCHEDULED"
+        for identity in [
+            semantic_identity(
+                meeting,
+                meeting.get("supersedes_start_at"),
+                allow_date_only=True,
+            )
+        ]
+        if identity is not None
     }
 
     unique_meetings = {}
@@ -87,18 +150,25 @@ def _collect_meetings(records, start_date, end_date=None):
         status = meeting.get("status", "CONFIRMED")
         if status == "CANCELLED":
             continue
-        normalized_subject = subject_key(meeting)
-        if status in {"CONFIRMED", "TENTATIVE"} and (
-            normalized_subject in cancelled_subjects
-            or normalized_subject in rescheduled_subjects
-        ):
+        identity = semantic_identity(meeting) if not meeting.get("uid") else None
+        lifecycle_suppressed = identity in cancelled_occurrences
+        if identity is not None and not lifecycle_suppressed:
+            for superseded in rescheduled_occurrences:
+                if (
+                    superseded[:3] == identity[:3]
+                    and (superseded[3] is None or superseded[3] == identity[3])
+                ):
+                    lifecycle_suppressed = True
+                    break
+        if status in {"CONFIRMED", "TENTATIVE"} and lifecycle_suppressed:
             continue
-        key = (
-            meeting.get("uid") or meeting["date"],
-            meeting["time"],
-            normalized_subject,
-        )
-        unique_meetings[key] = meeting
+        if meeting.get("uid"):
+            key = ("ics", *event_key(meeting))
+        else:
+            key = ("semantic", identity)
+        current = unique_meetings.get(key)
+        if current is None or should_replace(current, meeting):
+            unique_meetings[key] = meeting
     in_range = [
         meeting
         for meeting in unique_meetings.values()
@@ -280,9 +350,26 @@ def format_attention_digest(records, start_date=None):
     return "\n".join(lines).rstrip()
 
 
-def due_reminder_meetings(records, now=None, lead_minutes=15, window_minutes=5):
+def due_reminder_meetings(
+    records,
+    now=None,
+    lead_minutes=15,
+    window_minutes=5,
+    since=None,
+):
     now = now or local_now()
-    due_start = now + timedelta(minutes=max(0, lead_minutes - window_minutes))
+    if now.tzinfo is not None:
+        now = now.astimezone(ZoneInfo(LOCAL_TIMEZONE_NAME)).replace(tzinfo=None)
+    if since is not None and since.tzinfo is not None:
+        since = since.astimezone(ZoneInfo(LOCAL_TIMEZONE_NAME)).replace(tzinfo=None)
+    # A successful previous scan becomes the lower bound for the next scan.
+    # This intentionally overlaps the scheduler window after a lock/contention
+    # skip; reminder_key() makes the overlap idempotent.
+    due_start = (
+        since
+        if since is not None
+        else now - timedelta(minutes=max(0, window_minutes))
+    )
     due_end = now + timedelta(minutes=lead_minutes)
     meetings = _collect_meetings(records, due_start.date(), due_end.date())
     due = []
@@ -293,6 +380,8 @@ def due_reminder_meetings(records, now=None, lead_minutes=15, window_minutes=5):
             meeting["date"],
             time(meeting["sort_minutes"] // 60, meeting["sort_minutes"] % 60),
         )
+        if starts_at <= now:
+            continue
         if due_start < starts_at <= due_end:
             due.append(meeting)
     return due

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from main import FIELD_DELIMITER
-from mail_digest.config import load_env
+from mail_digest.config import SecretFilePermissionError, load_env
 from mail_digest.delivery.telegram import send_telegram
 from mail_digest.sources.apple_mail import fetch_mail
 from telegram_listener import send_message as listener_send_message
@@ -26,6 +26,7 @@ class EnvironmentLoaderTests(unittest.TestCase):
                 'TELEGRAM_CHAT_ID="fixture-chat"\n',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
 
             self.assertEqual(
                 load_env(path),
@@ -39,6 +40,15 @@ class EnvironmentLoaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing.env"
             with self.assertRaisesRegex(FileNotFoundError, "missing.env"):
+                load_env(path)
+
+    def test_world_readable_env_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "telegram.env"
+            path.write_text("TELEGRAM_BOT_TOKEN=fixture-token\n", encoding="utf-8")
+            path.chmod(0o644)
+
+            with self.assertRaises(SecretFilePermissionError):
                 load_env(path)
 
 
@@ -164,6 +174,31 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
         self.assertTrue(send_telegram("x" * 7001))
         self.assertEqual(post.call_count, 3)
 
+    @patch("mail_digest.delivery.telegram.time.sleep")
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_partial_chunk_failure_stops_without_claiming_delivery(self, load_env, post, sleep):
+        load_env.return_value = self.env
+        post.side_effect = [
+            Mock(status_code=200, json=lambda: {"ok": True}),
+            Mock(status_code=503),
+            Mock(status_code=503),
+            Mock(status_code=503),
+        ]
+        message = "a" * 3500 + "b" * 3500 + "c"
+
+        self.assertFalse(send_telegram(message, sleep=sleep))
+
+        self.assertEqual(post.call_count, 4)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["text"], "a" * 3500)
+        self.assertTrue(
+            all(
+                call.kwargs["json"]["text"] == "b" * 3500
+                for call in post.call_args_list[1:]
+            )
+        )
+        sleep.assert_called()
+
     @patch("mail_digest.delivery.telegram.requests.post")
     @patch("mail_digest.delivery.telegram.load_env")
     def test_network_error_redacts_bot_token(self, load_env, post):
@@ -177,6 +212,35 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
 
         self.assertNotIn(token, output.getvalue())
         self.assertIn("[REDACTED]", output.getvalue())
+
+    @patch("mail_digest.delivery.telegram.time.sleep")
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_transient_telegram_error_is_retried(self, load_env, post, sleep):
+        load_env.return_value = self.env
+        post.side_effect = [
+            Mock(status_code=503),
+            Mock(status_code=200, json=lambda: {"ok": True}),
+        ]
+
+        self.assertTrue(send_telegram("test"))
+
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called_once()
+
+    @patch("mail_digest.delivery.telegram.time.sleep")
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_telegram_429_honors_retry_after(self, load_env, post, sleep):
+        load_env.return_value = self.env
+        post.side_effect = [
+            Mock(status_code=429, headers={"Retry-After": "7"}),
+            Mock(status_code=200, json=lambda: {"ok": True}),
+        ]
+
+        self.assertTrue(send_telegram("test"))
+
+        sleep.assert_called_once_with(7.0)
 
 
 class TelegramListenerDeliveryFailureTests(unittest.TestCase):
@@ -205,6 +269,19 @@ class TelegramListenerDeliveryFailureTests(unittest.TestCase):
 
         self.assertNotIn(token, output.getvalue())
         self.assertIn("[REDACTED]", output.getvalue())
+
+    @patch("telegram_listener.time.sleep")
+    @patch("telegram_listener.requests.post")
+    def test_transient_listener_error_is_retried(self, post, sleep):
+        post.side_effect = [
+            Mock(status_code=502),
+            Mock(status_code=200, json=lambda: {"ok": True}),
+        ]
+
+        self.assertTrue(listener_send_message("fixture-token", "fixture-chat", "test"))
+
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called_once()
 
 
 if __name__ == "__main__":

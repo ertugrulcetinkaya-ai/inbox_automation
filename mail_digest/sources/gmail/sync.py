@@ -86,19 +86,28 @@ class GmailSynchronizer:
                 raise GmailSyncError("Gmail profile did not contain historyId")
             self.store.clear_staging()
             try:
+                snapshot_records = []
                 for message_id in self.api.iter_message_ids():
                     operation, payload = self._current_operation(message_id, cutoff_ms)
                     if operation == "upsert":
-                        self.store.stage_upsert(payload)
+                        snapshot_records.append(payload)
                 affected, new_history_id = _affected_ids(
                     self.api.iter_history(str(start_history_id))
                 )
+                affected_records = []
+                deleted_ids = []
                 for message_id in sorted(affected):
                     operation, payload = self._current_operation(message_id, cutoff_ms)
                     if operation == "upsert":
-                        self.store.stage_upsert(payload)
+                        affected_records.append(payload)
                     else:
-                        self.store.stage_delete(payload)
+                        deleted_ids.append(payload)
+                # All network calls complete before either short transaction.
+                # This avoids one BEGIN/COMMIT cycle per message without
+                # holding a SQLite transaction across Gmail requests.
+                self.store.stage_many(snapshot_records)
+                self.store.stage_many(affected_records)
+                self.store.stage_delete_many(deleted_ids)
                 self.store.activate_staging(new_history_id, cutoff_ms)
                 return
             except GmailHistoryExpired as exc:

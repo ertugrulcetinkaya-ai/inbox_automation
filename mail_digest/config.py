@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -25,6 +26,13 @@ YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS = 60
 # remote/Gmail message. The fetcher already bounds the candidate set, but a
 # cold Mail process can still need more than one minute to finish safely.
 APPLE_SCRIPT_TIMEOUT_SECONDS = 180
+# Gmail content is bounded before it reaches semantic parsing or the SQLite
+# cache. Calendar payloads are much smaller in normal use; a separate limit
+# keeps a malformed MIME part from turning into an unbounded cache entry.
+MAX_BODY_BYTES = 256 * 1024
+MAX_RAW_MIME_BYTES = 1024 * 1024
+MAX_ICS_BYTES = 256 * 1024
+GMAIL_HTTP_TIMEOUT_SECONDS = 30
 DIGEST_LOCK_FILE = Path(
     os.environ.get("MAIL_DIGEST_LOCK_FILE", "/tmp/mail_unread_digest.lock")
 ).expanduser()
@@ -40,6 +48,10 @@ ATTENTION_CONFIDENCE_THRESHOLD = 0.80
 MAIL_SOURCE_DEFAULT = "apple_mail"
 GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
 GMAIL_DATA_DIR = Path.home() / ".hermes_local_automation" / "gmail"
+
+
+class SecretFilePermissionError(PermissionError):
+    """A credentials file is readable by another local user."""
 
 
 def gmail_credentials_file():
@@ -135,7 +147,7 @@ SEMANTIC_TENTATIVE_RE = re.compile(
 
 
 def log(message):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = local_now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}", flush=True)
 
 
@@ -152,6 +164,14 @@ def load_env(env_file=None):
     env = {}
     if not env_path.is_file():
         raise FileNotFoundError(f"Env file not found at {env_path}")
+    try:
+        mode = stat.S_IMODE(env_path.stat().st_mode)
+    except OSError as exc:
+        raise SecretFilePermissionError(f"Cannot inspect env file permissions: {env_path}") from exc
+    if mode & 0o077:
+        raise SecretFilePermissionError(
+            f"Env file must be owner-readable only (0600): {env_path}"
+        )
     with env_path.open("r", encoding="utf-8") as handle:
         for raw_line in handle:
             line = raw_line.strip()

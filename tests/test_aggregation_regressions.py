@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 from main import format_digest, format_upcoming_digest, parse_ics_meetings
 
@@ -80,6 +80,91 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
         digest = format_upcoming_digest([confirmed, cancelled], date(2026, 8, 14))
 
         self.assertIn("Bugün veya sonrasında toplantı yok.", digest)
+
+    def test_cancellation_does_not_hide_different_uid_with_same_subject(self):
+        cancelled = ics_record(
+            uid="cancelled-instance",
+            sequence=1,
+            start="20260915T100000",
+            status="CANCELLED",
+        )
+        valid = ics_record(
+            uid="valid-instance",
+            sequence=0,
+            start="20260922T100000",
+        )
+
+        digest = format_upcoming_digest([cancelled, valid], date(2026, 9, 1))
+
+        self.assertIn("22 Eylül 2026", digest)
+        self.assertIn("Aynı toplantı", digest)
+
+    def test_semantic_identity_keeps_same_subject_for_different_senders(self):
+        records = [
+            {
+                "sender": "Birinci Organizatör <one@example.com>",
+                "subject": "Proje toplantısı",
+                "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            },
+            {
+                "sender": "İkinci Organizatör <two@example.com>",
+                "subject": "Proje toplantısı",
+                "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            },
+        ]
+
+        digest = format_upcoming_digest(records, date(2026, 9, 1))
+
+        self.assertEqual(digest.count("Proje toplantısı"), 2)
+
+    def test_same_sequence_prefers_newer_source_timestamp(self):
+        older = ics_record(
+            uid="same-sequence",
+            sequence=2,
+            start="20260920T100000",
+        )
+        newer = ics_record(
+            uid="same-sequence",
+            sequence=2,
+            start="20260921T100000",
+        )
+        older["source_received_at"] = datetime(2026, 9, 12, 9, 0)
+        newer["source_received_at"] = datetime(2026, 9, 12, 10, 0)
+
+        for records in ([older, newer], [newer, older]):
+            with self.subTest(order=records):
+                digest = format_upcoming_digest(records, date(2026, 9, 1))
+                self.assertIn("21 Eylül 2026", digest)
+                self.assertNotIn("20 Eylül 2026", digest)
+
+    def test_recurring_occurrence_cancellation_does_not_hide_other_occurrences(self):
+        record = {
+            "sender": "Calendar <calendar@example.com>",
+            "subject": "Seri toplantı",
+            "content": (
+                "BEGIN:VCALENDAR\n"
+                "BEGIN:VEVENT\n"
+                "UID:recurring-series\n"
+                "RECURRENCE-ID;TZID=Europe/Istanbul:20260915T100000\n"
+                "DTSTART;TZID=Europe/Istanbul:20260915T100000\n"
+                "SUMMARY:Seri toplantı\n"
+                "STATUS:CANCELLED\n"
+                "END:VEVENT\n"
+                "BEGIN:VEVENT\n"
+                "UID:recurring-series\n"
+                "RECURRENCE-ID;TZID=Europe/Istanbul:20260922T100000\n"
+                "DTSTART;TZID=Europe/Istanbul:20260922T100000\n"
+                "SUMMARY:Seri toplantı\n"
+                "STATUS:CONFIRMED\n"
+                "END:VEVENT\n"
+                "END:VCALENDAR\n"
+            ),
+        }
+
+        digest = format_upcoming_digest([record], date(2026, 9, 1))
+
+        self.assertIn("22 Eylül 2026", digest)
+        self.assertNotIn("15 Eylül 2026", digest)
 
     def test_semantic_duplicate_invite_is_listed_once(self):
         record = {

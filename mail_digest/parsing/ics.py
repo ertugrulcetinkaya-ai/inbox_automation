@@ -10,6 +10,7 @@ from email.parser import Parser
 
 from ..config import ICS_MARKERS
 from ..models import Meeting
+from ..utils import record_source_received_at
 from .dates import parse_received_date
 
 try:
@@ -86,8 +87,8 @@ def _parse_ics_datetime(value, params):
     elif timezone_name and ZoneInfo is not None:
         try:
             parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
-        except Exception:
-            pass
+        except (KeyError, ValueError):
+            timezone_name = ""
     return parsed, timezone_name
 
 
@@ -146,6 +147,53 @@ def _normalize_ics_status(status, calendar_method):
     return "CONFIRMED"
 
 
+def _ics_event_key(meeting):
+    """Return the lifecycle key for an ICS event.
+
+    A recurring series deliberately shares its UID across occurrences. When a
+    RECURRENCE-ID is present it is therefore part of the key; ordinary events
+    retain the UID-only identity used by calendar producers.
+    """
+
+    recurrence_id = meeting.recurrence_id
+    if isinstance(recurrence_id, datetime):
+        recurrence_id = recurrence_id.isoformat()
+    elif isinstance(recurrence_id, date):
+        recurrence_id = recurrence_id.isoformat()
+    return meeting.uid, recurrence_id or ""
+
+
+def _ics_status_priority(status):
+    return {
+        "CONFIRMED": 0,
+        "TENTATIVE": 1,
+        "RESCHEDULED": 2,
+        "CANCELLED": 3,
+    }.get(status, 0)
+
+
+def _ics_should_replace(current, candidate):
+    if candidate.sequence != current.sequence:
+        return candidate.sequence > current.sequence
+    candidate_priority = _ics_status_priority(candidate.status)
+    current_priority = _ics_status_priority(current.status)
+    if candidate_priority != current_priority:
+        return candidate_priority > current_priority
+    candidate_received = record_source_received_at(
+        {"source_received_at": candidate.source_received_at}
+    )
+    current_received = record_source_received_at(
+        {"source_received_at": current.source_received_at}
+    )
+    if candidate_received != current_received:
+        if current_received is None:
+            return candidate_received is not None
+        if candidate_received is None:
+            return False
+        return candidate_received > current_received
+    return candidate.source_message_id > current.source_message_id
+
+
 def _parse_ics_event(lines, record, calendar_method=""):
     properties = {}
     for line in lines:
@@ -167,8 +215,17 @@ def _parse_ics_event(lines, record, calendar_method=""):
 
     start_params, start_value = _ics_first(properties, "DTSTART")
     start_at, timezone_name = _parse_ics_datetime(start_value, start_params)
+    recurrence_params, recurrence_value = _ics_first(properties, "RECURRENCE-ID")
+    recurrence_id, recurrence_timezone_name = _parse_ics_datetime(
+        recurrence_value,
+        recurrence_params,
+    )
+    if recurrence_id is not None and not timezone_name:
+        timezone_name = recurrence_timezone_name
     if start_at is None and normalized_status == "CANCELLED":
-        start_at = record.get("received_date")
+        # Calendar cancellations commonly omit DTSTART and identify the
+        # cancelled occurrence solely with RECURRENCE-ID.
+        start_at = recurrence_id or record.get("received_date")
         if not isinstance(start_at, (date, datetime)):
             start_at = parse_received_date(record.get("date", ""))
     if start_at is None:
@@ -207,6 +264,8 @@ def _parse_ics_event(lines, record, calendar_method=""):
         sequence=sequence,
         source_message_id=source_message_id,
         confidence=1.0,
+        source_received_at=record_source_received_at(record),
+        recurrence_id=recurrence_id,
     )
 
 
@@ -259,19 +318,10 @@ def parse_ics_meetings(record):
             meeting = _parse_ics_event(block, record, calendar_method)
             if meeting is None:
                 continue
-            key = (meeting.uid, meeting.start_at, meeting.title.casefold())
-            existing = next((item for item in meetings if (
-                item.uid, item.start_at, item.title.casefold()
-            ) == key), None)
+            key = _ics_event_key(meeting)
+            existing = next((item for item in meetings if _ics_event_key(item) == key), None)
             if existing is None:
                 meetings.append(meeting)
-            elif (
-                meeting.sequence > existing.sequence
-                or (
-                    meeting.sequence == existing.sequence
-                    and meeting.status == "CANCELLED"
-                    and existing.status != "CANCELLED"
-                )
-            ):
+            elif _ics_should_replace(existing, meeting):
                 meetings[meetings.index(existing)] = meeting
     return meetings

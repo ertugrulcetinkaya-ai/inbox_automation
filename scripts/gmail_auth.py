@@ -8,10 +8,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mail_digest.sources.gmail.interactive import authorize_interactively
-
 
 def main() -> int:
+    from mail_digest.sources.gmail.interactive import authorize_interactively
+
     token_path = authorize_interactively()
     print(f"Gmail read-only token written securely to {token_path}")
     return 0

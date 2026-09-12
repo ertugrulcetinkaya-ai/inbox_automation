@@ -14,7 +14,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - Likely meeting/calendar messages are parsed for Turkish and English date/time formats.
 - ICS-first parsing is mandatory: parse inline `VCALENDAR/VEVENT` and MIME `text/calendar`/`.ics` parts before semantic text fallback.
 - Non-ICS semantic candidates require a second deterministic context review. A strong meeting subject may support an all-day event; body-only candidates require a nearby meeting expression, date, and time. Quoted `From/Sent/Subject` thread blocks and unrelated report dates must not become meetings. Verified low-confidence meetings remain visible in the attention output rather than being silently filtered.
-- The canonical `Meeting` fields are `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id`, and `confidence`.
+- The canonical `Meeting` fields are `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id`, `confidence`, `source_received_at`, `supersedes_start_at`, and `recurrence_id`.
 - Meeting status is normalized to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; `STATUS:CANCELLED` and `METHOD:CANCEL` must suppress the event.
 - For the same ICS `UID`, the highest `SEQUENCE` wins. Semantic reschedule messages must keep the new date and discard the old date.
 - AppleScript transport must preserve content line breaks and may carry raw MIME source; do not flatten ICS content before Python parsing.
@@ -26,7 +26,9 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - The daily output contains meetings scheduled for the current day. If none are found, it sends "Bugün toplantı yok."
 - A weekly mode covers today plus the following six days, grouped by weekday. It marks overlapping timed meetings and gaps shorter than 15 minutes.
 - Daily, upcoming, and weekly renderers separate `RESCHEDULED`, `TENTATIVE`, and confidence-below-0.80 meetings into a `Dikkat gerektirenler` section. `/dikkat` renders only that upcoming subset. Cancelled meetings remain suppressed everywhere.
-- The reminder mode checks a configurable lead time (15 minutes by default) in a five-minute scheduler window, skips all-day events, and sends subject/time/location/join URL. Only successful sends are deduplicated. The state file stores hashed occurrence identities rather than private meeting text.
+- The reminder mode checks a configurable lead time (15 minutes by default) in a five-minute scheduler window, skips all-day events, and sends subject/time/location/join URL. Only successful sends are deduplicated. The state file stores hashed occurrence identities rather than private meeting text and persists `last_successful_reminder_scan` for catch-up.
+- A successful reminder scan uses `(last_successful_scan, now + lead]` as its catch-up range; the first scan has a small recovery overlap, and the cursor advances only after a successful scan/send outcome.
+- Gmail body/raw MIME handling is bounded (`MAX_BODY_BYTES=256 KiB`, `MAX_RAW_MIME_BYTES=1 MiB`, `MAX_ICS_BYTES=256 KiB`), and the cache stores extracted calendar payloads rather than full raw MIME whenever possible.
 - `main.py` is a thin backward-compatible facade. The implementation is split under `mail_digest/`: `sources/apple_mail.py`, `parsing/`, `services/meeting_service.py`, `delivery/telegram.py`, and `cli.py`.
 - Parsing layers must not import Telegram delivery or require network credentials; this keeps date/ICS changes independently testable.
 - Tests include a 50-case parser matrix, 20 sanitized fixtures, ICS aggregation regressions, and AppleScript/Telegram failure-path coverage. Do not add real mailbox contents, credentials, or personal identifiers to fixtures.
@@ -54,7 +56,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - SECURITY: Do not print or expose the Telegram bot token.
 - `mail_digest/cli.py`: Sends the daily meeting digest; `main.py` delegates to it for launchd compatibility.
 - `mail_digest/services/lock.py`: Owns the shared non-blocking `fcntl.flock()` lock at `/tmp/mail_unread_digest.lock`; both launchd and Telegram command execution must use `mail_digest.cli.run_digest()`.
-- `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, `/hafta`/`/haftalik`/`/haftalık`/`/week`, `/dikkat`/`/attention`, and `/durum`; ASCII aliases remain supported. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
+- `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, `/hafta`/`/haftalik`/`/haftalık`/`/week`, `/dikkat`/`/attention`, and `/durum`; ASCII aliases remain supported. Optional Company Reporting commands use an installed adapter rather than runtime `sys.path` injection. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
 
 ## Automation (launchd)
 - `launchd/*.plist.template`: Machine-independent launchd templates.

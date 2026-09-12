@@ -16,7 +16,9 @@ from .services.meeting_service import (
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
 from .services.reminder_state import (
+    load_last_successful_reminder_scan,
     load_sent_reminders,
+    mark_reminder_scan_succeeded,
     mark_reminders_sent,
     reminder_key,
 )
@@ -57,12 +59,20 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
             now=now,
             lead_minutes=lead_minutes,
             window_minutes=window_minutes,
+            since=load_last_successful_reminder_scan(now=now),
         )
         sent_reminders = load_sent_reminders(now=now)
         reminder_meetings = [
             meeting for meeting in due if reminder_key(meeting) not in sent_reminders
         ]
         if not reminder_meetings:
+            if not dry_run:
+                try:
+                    mark_reminder_scan_succeeded(scan_at=now)
+                except OSError as exc:
+                    log(f"Reminder scan state could not be saved: {exc}")
+                    log("DONE meeting digest (FAILED)")
+                    return 1
             log("No unsent meeting reminders are due")
             log("DONE meeting digest")
             return 0
@@ -106,7 +116,12 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
 
         if selected_mode == "reminder":
             try:
-                mark_reminders_sent(sent_reminders, reminder_meetings, now=now)
+                mark_reminders_sent(
+                    sent_reminders,
+                    reminder_meetings,
+                    now=now,
+                    last_successful_scan=now,
+                )
             except OSError as exc:
                 log(f"Reminder state could not be saved: {exc}")
                 log("DONE meeting digest (FAILED)")

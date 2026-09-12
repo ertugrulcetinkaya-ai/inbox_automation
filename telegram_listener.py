@@ -1,10 +1,8 @@
-import os
+import random
 import requests
 import time
 import warnings
-import sys
 import asyncio
-from pathlib import Path
 
 # Suppress urllib3 NotOpenSSLWarning
 try:
@@ -13,39 +11,60 @@ try:
 except ImportError:
     pass
 
-COMPANY_REPORT_ROOT = Path(
-    os.environ.get(
-        "COMPANY_REPORT_ROOT",
-        str(Path.home() / "Projects" / "company_reporting_hub"),
-    )
-).expanduser()
-if str(COMPANY_REPORT_ROOT) not in sys.path:
-    sys.path.insert(0, str(COMPANY_REPORT_ROOT))
-
 from mail_digest.cli import run_digest as execute_digest
 from mail_digest.config import load_env
 from mail_digest.services.lock import DigestAlreadyRunning
 
-def send_message(token, chat_id, text):
+
+TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
+TELEGRAM_MAX_ATTEMPTS = 3
+
+
+def _listener_retry_delay(response, attempt):
+    if getattr(response, "status_code", None) == 429:
+        headers = getattr(response, "headers", {}) or {}
+        value = None
+        if hasattr(headers, "get"):
+            value = headers.get("Retry-After") or headers.get("retry-after")
+        try:
+            return min(30.0, max(0.0, float(value)))
+        except (TypeError, ValueError):
+            pass
+    return min(30.0, 0.5 * (2 ** (attempt - 1)) + random.uniform(0, 0.1))
+
+
+def send_message(token, chat_id, text, sleep=None):
+    sleep = sleep or time.sleep
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"Error sending Telegram message: HTTP {response.status_code}")
-            return False
+    for attempt in range(1, TELEGRAM_MAX_ATTEMPTS + 1):
         try:
-            response_payload = response.json()
-        except (AttributeError, ValueError):
-            response_payload = None
-        if not isinstance(response_payload, dict) or response_payload.get("ok") is not True:
+            response = requests.post(url, json=payload, timeout=10)
+        except Exception as exc:
+            retryable = isinstance(exc, (requests.RequestException, OSError, TimeoutError))
+            if retryable and attempt < TELEGRAM_MAX_ATTEMPTS:
+                sleep(_listener_retry_delay(None, attempt))
+                continue
+            safe_error = str(exc).replace(token, "[REDACTED]")
+            print(f"Error sending Telegram message: {safe_error}")
+            return False
+
+        if response.status_code == 200:
+            try:
+                response_payload = response.json()
+            except (AttributeError, ValueError):
+                response_payload = None
+            if isinstance(response_payload, dict) and response_payload.get("ok") is True:
+                return True
             print("Error sending Telegram message: invalid response")
             return False
-        return True
-    except Exception as exc:
-        safe_error = str(exc).replace(token, "[REDACTED]")
-        print(f"Error sending Telegram message: {safe_error}")
+
+        if response.status_code in TRANSIENT_HTTP_STATUSES and attempt < TELEGRAM_MAX_ATTEMPTS:
+            sleep(_listener_retry_delay(response, attempt))
+            continue
+        print(f"Error sending Telegram message: HTTP {response.status_code}")
         return False
+    return False
 
 def run_company_report_command(text):
     try:

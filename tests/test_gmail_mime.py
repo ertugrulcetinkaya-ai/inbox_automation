@@ -1,6 +1,7 @@
 import base64
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from mail_digest.parsing.meeting_parser import extract_meetings
 from mail_digest.sources.gmail.api import GmailApiError
@@ -65,7 +66,9 @@ class GmailMimeTests(unittest.TestCase):
         self.assertEqual(record["subject"], "Ağustos değerlendirmesi")
         self.assertIn("Gönderen", record["sender"])
         self.assertIn("Toplantımız", record["content"])
-        self.assertEqual(record["received_date"], date(2026, 8, 19))
+        # Gmail internalDate is authoritative even when the sender's Date:
+        # header points at another day.
+        self.assertEqual(record["received_date"], date(2026, 8, 18))
 
     def test_multipart_alternative_plain_wins(self):
         root = payload(parts=[
@@ -175,10 +178,80 @@ class GmailMimeTests(unittest.TestCase):
                 {"name": "Date", "value": "Wed, 19 Aug 2026 10:00:00 +0300"},
             ],
         )
-        record = self.normalize(message(root))
+        record = self.normalize(message(root, internal_date="1787122800000"))
         meetings = extract_meetings(record, date(2026, 8, 19))
         self.assertEqual(len(meetings), 1)
         self.assertEqual(meetings[0]["time"], "14:00")
+
+    def test_relative_date_uses_internal_date_not_sender_date_header(self):
+        root = payload(
+            parts=[payload(mime_type="text/plain", data=b64("Toplantı yarın saat 14:00."))],
+            headers=[
+                {"name": "Subject", "value": "Toplantı"},
+                {"name": "Date", "value": "Thu, 10 Sep 2026 10:00:00 +0300"},
+            ],
+        )
+        record = self.normalize(message(root, internal_date="1789196400000"))
+
+        meetings = extract_meetings(record, date(2026, 9, 13))
+
+        self.assertEqual(len(meetings), 1)
+        self.assertEqual(meetings[0]["date"], date(2026, 9, 13))
+
+    def test_internal_date_remains_authoritative_over_stale_record_date(self):
+        root = payload(
+            parts=[payload(mime_type="text/plain", data=b64("Toplantı yarın saat 14:00."))],
+            headers=[{"name": "Subject", "value": "Toplantı"}],
+        )
+        record = self.normalize(message(root, internal_date="1789196400000"))
+        record["received_date"] = date(2026, 9, 10)
+
+        meetings = extract_meetings(record, date(2026, 9, 13))
+
+        self.assertEqual(len(meetings), 1)
+        self.assertEqual(meetings[0]["date"], date(2026, 9, 13))
+
+    def test_raw_cache_value_keeps_only_calendar_payload(self):
+        root = payload(
+            parts=[payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR"))]
+        )
+        raw_value = (
+            "Content-Type: multipart/mixed; boundary=x\n\n"
+            "--x\nContent-Type: text/plain\n\nPRIVATE BODY\n"
+            "--x\nContent-Type: text/calendar\n\n"
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:u\nEND:VEVENT\nEND:VCALENDAR\n"
+            "--x--"
+        )
+
+        record = normalize_message(
+            message(root),
+            lambda *_: {},
+            lambda *_: {"raw": b64(raw_value)},
+        )
+
+        self.assertIn("BEGIN:VCALENDAR", record["raw_source"])
+        self.assertNotIn("PRIVATE BODY", record["raw_source"])
+
+    @patch("mail_digest.sources.gmail.mime.MAX_BODY_BYTES", 8)
+    def test_oversized_body_is_degraded_without_unbounded_storage(self):
+        root = payload(parts=[payload(mime_type="text/plain", data=b64("çok uzun gövde"))])
+
+        record = self.normalize(message(root))
+
+        self.assertEqual(record["content"], "")
+
+    @patch("mail_digest.sources.gmail.mime.MAX_RAW_MIME_BYTES", 8)
+    def test_oversized_raw_mime_is_not_cached(self):
+        root = payload(parts=[payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR"))])
+        raw = "Content-Type: text/calendar\n\nBEGIN:VCALENDAR\nEND:VCALENDAR"
+
+        record = normalize_message(
+            message(root),
+            lambda *_: {},
+            lambda *_: {"raw": b64(raw)},
+        )
+
+        self.assertEqual(record["raw_source"], "")
 
     def test_critical_internal_date_or_labels_failure_aborts(self):
         for value in (

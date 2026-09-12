@@ -6,11 +6,18 @@ import base64
 import html
 import re
 from datetime import datetime
+from email import policy
 from email.header import decode_header
+from email.parser import Parser
 
-from ...config import LOCAL_TIMEZONE_NAME, TARGET_EMAIL
-from ...parsing.dates import parse_received_date
-from ...utils import sanitize_content, sanitize_transport_field
+from ...config import (
+    LOCAL_TIMEZONE_NAME,
+    MAX_BODY_BYTES,
+    MAX_ICS_BYTES,
+    MAX_RAW_MIME_BYTES,
+    TARGET_EMAIL,
+)
+from ...utils import limit_utf8_bytes, sanitize_content, sanitize_transport_field
 from .api import GmailApiError
 
 try:
@@ -23,14 +30,28 @@ class MessageStructureError(ValueError):
     """A critical Gmail field is absent or unusable."""
 
 
+class MessageSizeError(MessageStructureError):
+    """A decoded Gmail body exceeds the local parsing/storage policy."""
+
+
 ICS_TEXT_MARKERS = ("begin:vcalendar", "begin:vevent", "method:request", "method:publish", "method:cancel")
 
 
-def decode_base64url(data):
+def decode_base64url(data, max_bytes=None):
     if not isinstance(data, str):
         raise ValueError("body data is not text")
+    if max_bytes is not None:
+        # Reject oversized payloads before base64 decoding allocates the full
+        # byte string. The post-decode check below handles unpadded input and
+        # any rounding edge cases.
+        encoded_limit = ((max_bytes + 2) * 4) // 3 + 4
+        if len(data) > encoded_limit:
+            raise MessageSizeError("Gmail payload exceeds the configured size limit")
     padded = data + "=" * (-len(data) % 4)
-    return base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+    decoded = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+    if max_bytes is not None and len(decoded) > max_bytes:
+        raise MessageSizeError("Gmail payload exceeds the configured size limit")
+    return decoded
 
 
 def _decode_header(value):
@@ -63,7 +84,7 @@ def _headers(payload):
         if name and name not in result:
             try:
                 result[name] = _decode_header(item.get("value", ""))
-            except Exception:
+            except (LookupError, TypeError, UnicodeError, ValueError):
                 result[name] = sanitize_transport_field(str(item.get("value", "")))
     return result
 
@@ -90,7 +111,7 @@ def _charset(part):
     return match.group(1) if match else "utf-8"
 
 
-def _decode_text_part(part, message_id, attachment_loader):
+def _decode_text_part(part, message_id, attachment_loader, max_bytes=MAX_BODY_BYTES):
     body = part.get("body") or {}
     data = body.get("data")
     if not data and body.get("attachmentId"):
@@ -98,7 +119,7 @@ def _decode_text_part(part, message_id, attachment_loader):
         data = (attachment or {}).get("data")
     if not data:
         return ""
-    raw = decode_base64url(data)
+    raw = decode_base64url(data, max_bytes=max_bytes)
     charset = _charset(part)
     try:
         return raw.decode(charset)
@@ -132,10 +153,46 @@ def _calendar_metadata_signal(parts):
     return False
 
 
+def _calendar_payloads_from_raw_source(raw_text):
+    """Extract only calendar parts from a bounded raw MIME message."""
+
+    payloads = []
+    try:
+        message = Parser(policy=policy.default).parsestr(raw_text)
+    except (TypeError, ValueError):
+        message = None
+    if message is not None:
+        for part in message.walk():
+            content_type = (part.get_content_type() or "").casefold()
+            filename = (part.get_filename() or "").casefold()
+            if content_type != "text/calendar" and not filename.endswith(".ics"):
+                continue
+            payload = part.get_payload(decode=True)
+            if isinstance(payload, bytes):
+                if len(payload) > MAX_ICS_BYTES:
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                payload = payload.decode(charset, errors="replace")
+            elif not isinstance(payload, str):
+                continue
+            payload = limit_utf8_bytes(payload, MAX_ICS_BYTES)
+            if payload:
+                payloads.append(payload)
+    if payloads:
+        return payloads
+
+    # Some providers return an ICS document without a MIME Content-Type. Keep
+    # the line structure but discard surrounding plaintext/headers.
+    return [
+        limit_utf8_bytes(match.group(0), MAX_ICS_BYTES)
+        for match in re.finditer(
+            r"(?is)BEGIN:VCALENDAR.*?END:VCALENDAR", raw_text or ""
+        )
+        if match.group(0)
+    ]
+
+
 def _received_date_text(headers, internal_date_ms):
-    date_header = headers.get("date", "")
-    if date_header:
-        return date_header
     timestamp = internal_date_ms / 1000
     value = datetime.fromtimestamp(timestamp, ZoneInfo(LOCAL_TIMEZONE_NAME) if ZoneInfo else None)
     return value.strftime("%a, %d %b %Y %H:%M:%S %z")
@@ -171,15 +228,20 @@ def normalize_message(message, attachment_loader, raw_loader):
             break
         for part in candidates:
             try:
-                candidate = _decode_text_part(part, message_id, attachment_loader)
+                candidate = _decode_text_part(
+                    part,
+                    message_id,
+                    attachment_loader,
+                    max_bytes=MAX_BODY_BYTES,
+                )
             except GmailApiError:
                 raise
-            except Exception:
+            except (KeyError, LookupError, MessageStructureError, TypeError, UnicodeError, ValueError):
                 continue
             if candidate:
                 content = _HTMLTextParser.convert(candidate) if is_html else candidate
                 break
-    content = sanitize_content(content)
+    content = limit_utf8_bytes(sanitize_content(content), MAX_BODY_BYTES)
 
     calendar_signal = _calendar_metadata_signal(parts) or any(
         marker in content.casefold() for marker in ICS_TEXT_MARKERS
@@ -188,19 +250,26 @@ def normalize_message(message, attachment_loader, raw_loader):
     if calendar_signal:
         try:
             raw_response = raw_loader(message_id)
-            raw_source = decode_base64url((raw_response or {}).get("raw", "")).decode(
+            raw_bytes = decode_base64url(
+                (raw_response or {}).get("raw", ""),
+                max_bytes=MAX_RAW_MIME_BYTES,
+            )
+            raw_text = raw_bytes.decode(
                 "utf-8", errors="replace"
             )
-            raw_source = sanitize_content(raw_source)
+            raw_source = "\n".join(_calendar_payloads_from_raw_source(raw_text))
+            raw_source = limit_utf8_bytes(sanitize_content(raw_source), MAX_ICS_BYTES)
         except GmailApiError:
             raise
-        except Exception:
+        except (KeyError, LookupError, MessageStructureError, TypeError, UnicodeError, ValueError):
             raw_source = ""
 
     received_text = _received_date_text(headers, internal_date_ms)
-    received_date = parse_received_date(received_text)
-    if received_date is None:
-        received_date = datetime.fromtimestamp(internal_date_ms / 1000).date()
+    received_at = datetime.fromtimestamp(
+        internal_date_ms / 1000,
+        ZoneInfo(LOCAL_TIMEZONE_NAME) if ZoneInfo else None,
+    )
+    received_date = received_at.date()
     rfc_message_id = headers.get("message-id", "").strip()
     source_message_id = (
         rfc_message_id
@@ -218,6 +287,7 @@ def normalize_message(message, attachment_loader, raw_loader):
         "date": received_text,
         "received_date": received_date,
         "received_local_date": received_date.isoformat(),
+        "source_received_at": received_at,
         "content": content,
         "source_message_id": source_message_id,
         "raw_source": raw_source,

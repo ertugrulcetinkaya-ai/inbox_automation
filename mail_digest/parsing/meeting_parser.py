@@ -14,11 +14,11 @@ from ..config import (
     SEMANTIC_RESCHEDULED_RE,
     SEMANTIC_TENTATIVE_RE,
 )
-from ..models import Meeting
+from ..models import Meeting, MeetingOccurrence
 from .dates import _date_hits, parse_received_date
 from .ics import parse_ics_meetings
 from .times import _time_for_date, _time_hits
-from ..utils import strip_quoted_reply
+from ..utils import record_source_received_at, strip_quoted_reply
 
 try:
     from zoneinfo import ZoneInfo
@@ -44,8 +44,8 @@ def _meeting_display_start(meeting):
     if isinstance(start_at, datetime) and start_at.tzinfo is not None and ZoneInfo is not None:
         try:
             return start_at.astimezone(ZoneInfo(LOCAL_TIMEZONE_NAME))
-        except Exception:
-            pass
+        except (KeyError, OverflowError, ValueError):
+            return start_at
     return start_at
 
 
@@ -54,14 +54,18 @@ def _meeting_display_date(meeting):
     return start_at.date() if isinstance(start_at, datetime) else start_at
 
 
-def _meeting_to_digest_record(meeting, position=0, date_override=None):
+def _meeting_to_digest_record(
+    meeting,
+    position=0,
+    date_override=None,
+) -> MeetingOccurrence:
     start_at = _meeting_display_start(meeting)
     end_at = meeting.end_at
     if isinstance(end_at, datetime) and end_at.tzinfo is not None and ZoneInfo is not None:
         try:
             end_at = end_at.astimezone(ZoneInfo(LOCAL_TIMEZONE_NAME))
-        except Exception:
-            pass
+        except (KeyError, OverflowError, ValueError):
+            end_at = meeting.end_at
 
     if isinstance(start_at, datetime):
         label = start_at.strftime("%H:%M")
@@ -90,6 +94,9 @@ def _meeting_to_digest_record(meeting, position=0, date_override=None):
         "sequence": meeting.sequence,
         "source_message_id": meeting.source_message_id,
         "confidence": meeting.confidence,
+        "source_received_at": meeting.source_received_at,
+        "supersedes_start_at": meeting.supersedes_start_at,
+        "recurrence_id": meeting.recurrence_id,
         "_position": position,
     }
 
@@ -127,14 +134,16 @@ def _semantic_context_for_date(text, date_hit):
     return text[start:end]
 
 
-def _has_time_near_date(text, date_hit):
+def _has_time_near_date(text, date_hit, time_hits=None):
+    if time_hits is None:
+        time_hits = _time_hits(text)
     return any(
         _distance_to_date(time_hit, date_hit) <= SEMANTIC_CONTEXT_RADIUS
-        for time_hit in _time_hits(text)
+        for time_hit in time_hits
     )
 
 
-def _passes_detailed_semantic_review(subject, text, date_hit):
+def _passes_detailed_semantic_review(subject, text, date_hit, time_hits=None):
     """Confirm a non-ICS date is really tied to a meeting context.
 
     A strong meeting signal in the subject can support an all-day semantic
@@ -152,10 +161,13 @@ def _passes_detailed_semantic_review(subject, text, date_hit):
     has_meeting_context = bool(EXPLICIT_MEETING_CONTEXT_RE.search(context)) or any(
         marker in normalized_context for marker in CALENDAR_MARKERS
     )
-    return has_meeting_context and _has_time_near_date(text, date_hit)
+    return has_meeting_context and _has_time_near_date(text, date_hit, time_hits)
 
 
 def _received_date_for_record(record, fallback_date):
+    source_received_at = record_source_received_at(record)
+    if source_received_at is not None:
+        return source_received_at.date()
     if "received_date" in record:
         received_date = record.get("received_date")
         if not isinstance(received_date, (date, datetime)):
@@ -188,7 +200,14 @@ def _semantic_date_hits_for_status(text, date_hits, status):
     return date_hits
 
 
-def _semantic_meeting_from_date_hit(record, subject, text, date_hit, status):
+def _semantic_meeting_from_date_hit(
+    record,
+    subject,
+    text,
+    date_hit,
+    status,
+    supersedes_start_at=None,
+):
     time_info = _time_for_date(text, date_hit)
     start_at = date_hit["date"]
     end_at = None
@@ -213,6 +232,36 @@ def _semantic_meeting_from_date_hit(record, subject, text, date_hit, status):
         status=status,
         source_message_id=record.get("source_message_id", "") or record.get("message_id", ""),
         confidence=0.70 if status == "RESCHEDULED" else 0.55,
+        source_received_at=record_source_received_at(record),
+        supersedes_start_at=supersedes_start_at,
+    )
+
+
+def _semantic_superseded_start(text, date_hits, status, selected_hit, time_hits=None):
+    """Return the old occurrence mentioned by a semantic reschedule message."""
+
+    if status != "RESCHEDULED" or len(date_hits) < 2 or selected_hit is not date_hits[-1]:
+        return None
+    old_hit = date_hits[0]
+    next_date_hit = date_hits[1]
+    time_hits = time_hits if time_hits is not None else _time_hits(text)
+    old_time = next(
+        (
+            item
+            for item in time_hits
+            if _distance_to_date(item, old_hit) <= SEMANTIC_CONTEXT_RADIUS
+            and item["end"] <= next_date_hit["start"]
+        ),
+        None,
+    )
+    if old_time is None:
+        # A common reschedule wording gives a time only for the new date. Keep
+        # the old date as a wildcard occurrence so the prior timed invitation
+        # can still be superseded without guessing its old time.
+        return old_hit["date"]
+    return datetime.combine(
+        old_hit["date"],
+        datetime_time(old_time["minutes"] // 60, old_time["minutes"] % 60),
     )
 
 
@@ -257,10 +306,12 @@ def extract_meetings(
 
     text = f"{subject}\n{content}"
     status = _semantic_status(text)
+    all_date_hits = _date_hits(text, start_date, relative_date=received_date)
+    time_hits = _time_hits(text)
     date_hits = [
         hit
-        for hit in _date_hits(text, start_date, relative_date=received_date)
-        if _passes_detailed_semantic_review(subject, text, hit)
+        for hit in all_date_hits
+        if _passes_detailed_semantic_review(subject, text, hit, time_hits)
     ]
     lifecycle_date_hits = _semantic_date_hits_for_status(text, date_hits, status)
     if include_lifecycle_outside_range and status == "RESCHEDULED":
@@ -285,13 +336,27 @@ def extract_meetings(
                         status="CANCELLED",
                         source_message_id=record.get("source_message_id", ""),
                         confidence=0.70,
+                        source_received_at=record_source_received_at(record),
                     ),
                     date_override=received_date or start_date,
                 )
             ]
     return [
         _meeting_to_digest_record(
-            _semantic_meeting_from_date_hit(record, subject, text, date_hit, status),
+            _semantic_meeting_from_date_hit(
+                record,
+                subject,
+                text,
+                date_hit,
+                status,
+                supersedes_start_at=_semantic_superseded_start(
+                    text,
+                    date_hits,
+                    status,
+                    date_hit,
+                    time_hits,
+                ),
+            ),
             position=date_hit["start"],
             date_override=received_date,
         )

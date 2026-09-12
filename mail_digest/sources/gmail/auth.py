@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 
 from google.auth.transport.requests import Request
+from google_auth_httplib2 import AuthorizedHttp
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+import httplib2
 
-from ...config import GMAIL_SCOPES, gmail_token_file
+from ...config import GMAIL_HTTP_TIMEOUT_SECONDS, GMAIL_SCOPES, gmail_token_file
 
 
 class GmailAuthError(RuntimeError):
@@ -71,4 +73,6 @@ def load_credentials(token_path: Path = None) -> Credentials:
 
 def build_service(token_path: Path = None):
     credentials = load_credentials(token_path)
-    return build("gmail", "v1", credentials=credentials, cache_discovery=False)
+    http = httplib2.Http(timeout=GMAIL_HTTP_TIMEOUT_SECONDS)
+    authorized_http = AuthorizedHttp(credentials, http=http)
+    return build("gmail", "v1", http=authorized_http, cache_discovery=False)

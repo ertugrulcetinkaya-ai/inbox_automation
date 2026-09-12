@@ -15,7 +15,9 @@ from mail_digest.services.meeting_service import (
     format_weekly_digest,
 )
 from mail_digest.services.reminder_state import (
+    load_last_successful_reminder_scan,
     load_sent_reminders,
+    mark_reminder_scan_succeeded,
     mark_reminders_sent,
     reminder_key,
 )
@@ -79,6 +81,31 @@ class MeetingReminderTests(unittest.TestCase):
         )
         self.assertEqual([meeting["subject"] for meeting in drifted], ["Yaklaşan toplantı"])
 
+    def test_catch_up_since_last_successful_scan_keeps_a_missed_tick(self):
+        records = [ics_record("catch-up", "20260824T091200")]
+
+        due = due_reminder_meetings(
+            records,
+            now=datetime(2026, 8, 24, 9, 5),
+            lead_minutes=15,
+            window_minutes=5,
+            since=datetime(2026, 8, 24, 9, 0),
+        )
+
+        self.assertEqual([meeting["subject"] for meeting in due], ["Fixture toplantısı"])
+
+    def test_first_scan_has_recovery_overlap_when_no_cursor_exists(self):
+        records = [ics_record("first-recovery", "20260824T091200")]
+
+        due = due_reminder_meetings(
+            records,
+            now=datetime(2026, 8, 24, 9, 5),
+            lead_minutes=15,
+            window_minutes=5,
+        )
+
+        self.assertEqual(len(due), 1)
+
     def test_successful_reminder_keys_are_persisted_without_private_titles(self):
         meeting = due_reminder_meetings(
             [ics_record("private-uid", "20260824T100000", summary="Özel toplantı başlığı")],
@@ -93,6 +120,22 @@ class MeetingReminderTests(unittest.TestCase):
             self.assertIn(reminder_key(meeting), sent)
             self.assertNotIn("Özel toplantı başlığı", state_file.read_text(encoding="utf-8"))
             self.assertEqual(stat.S_IMODE(state_file.stat().st_mode), 0o600)
+
+    def test_successful_scan_cursor_is_persisted_with_legacy_state_compatibility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "reminders.json"
+            mark_reminder_scan_succeeded(
+                scan_at=datetime(2026, 8, 24, 9, 45),
+                state_file=state_file,
+            )
+
+            self.assertEqual(
+                load_last_successful_reminder_scan(
+                    state_file=state_file,
+                    now=datetime(2026, 8, 24, 9, 46),
+                ),
+                datetime(2026, 8, 24, 9, 45),
+            )
 
     def test_utc_ics_is_reminded_in_istanbul_local_time_across_midnight(self):
         record = {
@@ -179,6 +222,7 @@ class MeetingReminderTests(unittest.TestCase):
             patch("mail_digest.cli.selected_source_name", return_value="gmail"),
             patch("mail_digest.cli.due_reminder_meetings", return_value=[]),
             patch("mail_digest.cli.load_sent_reminders", return_value={}),
+            patch("mail_digest.cli.mark_reminder_scan_succeeded"),
             patch("mail_digest.cli.send_telegram") as send,
         ):
             self.assertEqual(_run_digest(mode="reminder"), 0)
@@ -197,6 +241,7 @@ class MeetingReminderTests(unittest.TestCase):
             patch("mail_digest.cli.selected_source_name", return_value="gmail"),
             patch("mail_digest.cli.due_reminder_meetings", return_value=[meeting]),
             patch("mail_digest.cli.load_sent_reminders", return_value=sent),
+            patch("mail_digest.cli.mark_reminder_scan_succeeded"),
             patch("mail_digest.cli.send_telegram") as send,
         ):
             self.assertEqual(_run_digest(mode="reminder"), 0)

@@ -84,6 +84,9 @@ def fetch_mail():
             log(f"AppleScript error: {sanitize(result.stderr)}")
             return None
         return records
-    except Exception as exc:
-        log(f"Error fetching mail: {exc}")
+    except (OSError, UnicodeError, ValueError, subprocess.SubprocessError) as exc:
+        log(f"Apple Mail fetch failed ({exc.__class__.__name__})")
         return None
+    except Exception as exc:
+        log(f"Unexpected Apple Mail fetch failure ({exc.__class__.__name__})")
+        raise

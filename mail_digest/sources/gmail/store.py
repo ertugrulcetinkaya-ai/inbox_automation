@@ -91,13 +91,29 @@ class GmailStore:
         )
 
     def stage_upsert(self, record):
+        self.stage_many([record])
+
+    def stage_many(self, records):
+        """Stage a batch in one transaction, without holding it over network I/O."""
+
+        records = list(records)
+        if not records:
+            return
         with self.connection:
-            self._upsert("staging_messages", record)
+            for record in records:
+                self._upsert("staging_messages", record)
 
     def stage_delete(self, message_id):
+        self.stage_delete_many([message_id])
+
+    def stage_delete_many(self, message_ids):
+        message_ids = list(message_ids)
+        if not message_ids:
+            return
         with self.connection:
-            self.connection.execute(
-                "DELETE FROM staging_messages WHERE gmail_message_id=?", (message_id,)
+            self.connection.executemany(
+                "DELETE FROM staging_messages WHERE gmail_message_id=?",
+                ((message_id,) for message_id in message_ids),
             )
 
     def activate_staging(self, history_id, cutoff_ms):
@@ -157,6 +173,7 @@ class GmailStore:
                 "subject": row["subject"],
                 "date": row["date"],
                 "received_date": row["received_local_date"],
+                "internal_date_ms": row["internal_date_ms"],
                 "content": row["content"],
                 "source_message_id": row["source_message_id"],
                 "raw_source": row["raw_source"],
