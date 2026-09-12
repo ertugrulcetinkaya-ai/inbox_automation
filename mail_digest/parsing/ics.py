@@ -121,6 +121,10 @@ def _ics_event_blocks(text):
         marker = line.strip().upper()
         if marker == "BEGIN:VCALENDAR":
             has_ics = True
+            # METHOD belongs to this VCALENDAR. Resetting it at each calendar
+            # prevents a later METHOD:CANCEL from changing an earlier request
+            # when providers concatenate multiple calendars in one message.
+            calendar_method = ""
         elif marker.startswith("METHOD:"):
             calendar_method = marker.split(":", 1)[1].strip()
         elif marker == "BEGIN:VEVENT":
@@ -128,11 +132,11 @@ def _ics_event_blocks(text):
             current = []
         elif marker == "END:VEVENT":
             if current is not None:
-                blocks.append(current)
+                blocks.append((calendar_method, current))
             current = None
         elif current is not None:
             current.append(line)
-    return has_ics, calendar_method, blocks
+    return has_ics, blocks
 
 
 def _normalize_ics_status(status, calendar_method):
@@ -255,6 +259,7 @@ def _parse_ics_event(lines, record, calendar_method=""):
         uid=uid,
         title=summary or record.get("subject", "") or "Başlıksız toplantı",
         organizer=organizer,
+        thread_id=str(record.get("thread_id") or ""),
         start_at=start_at,
         end_at=end_at,
         timezone=timezone_name,
@@ -313,8 +318,8 @@ def parse_ics_meetings(record):
 
     meetings = []
     for payload in payloads:
-        _, calendar_method, blocks = _ics_event_blocks(payload)
-        for block in blocks:
+        _, blocks = _ics_event_blocks(payload)
+        for calendar_method, block in blocks:
             meeting = _parse_ics_event(block, record, calendar_method)
             if meeting is None:
                 continue

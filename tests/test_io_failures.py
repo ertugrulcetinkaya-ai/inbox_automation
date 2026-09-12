@@ -11,7 +11,11 @@ from main import FIELD_DELIMITER
 from mail_digest.config import SecretFilePermissionError, load_env
 from mail_digest.delivery.telegram import send_telegram
 from mail_digest.sources.apple_mail import fetch_mail
-from telegram_listener import send_message as listener_send_message
+from telegram_listener import (
+    _load_processed_update_ids,
+    process_update,
+    send_message as listener_send_message,
+)
 
 
 class EnvironmentLoaderTests(unittest.TestCase):
@@ -242,6 +246,28 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
 
         sleep.assert_called_once_with(7.0)
 
+    @patch("mail_digest.delivery.telegram.time.sleep")
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_telegram_429_reads_retry_after_from_bot_api_json(self, load_env, post, sleep):
+        load_env.return_value = self.env
+        post.side_effect = [
+            Mock(
+                status_code=429,
+                headers={},
+                json=lambda: {
+                    "ok": False,
+                    "error_code": 429,
+                    "parameters": {"retry_after": 7},
+                },
+            ),
+            Mock(status_code=200, json=lambda: {"ok": True}),
+        ]
+
+        self.assertTrue(send_telegram("test"))
+
+        sleep.assert_called_once_with(7.0)
+
 
 class TelegramListenerDeliveryFailureTests(unittest.TestCase):
     @patch("telegram_listener.requests.post")
@@ -282,6 +308,87 @@ class TelegramListenerDeliveryFailureTests(unittest.TestCase):
 
         self.assertEqual(post.call_count, 2)
         sleep.assert_called_once()
+
+    @patch("telegram_listener.time.sleep")
+    @patch("telegram_listener.requests.post")
+    def test_listener_429_reads_retry_after_from_bot_api_json(self, post, sleep):
+        post.side_effect = [
+            Mock(
+                status_code=429,
+                headers={},
+                json=lambda: {
+                    "ok": False,
+                    "error_code": 429,
+                    "parameters": {"retry_after": 4},
+                },
+            ),
+            Mock(status_code=200, json=lambda: {"ok": True}),
+        ]
+
+        self.assertTrue(listener_send_message("fixture-token", "fixture-chat", "test"))
+
+        sleep.assert_called_once_with(4.0)
+
+
+class TelegramUpdateStateTests(unittest.TestCase):
+    def test_update_is_dispatched_once_and_persisted(self):
+        update = {
+            "update_id": 42,
+            "message": {"chat": {"id": "fixture-chat"}, "text": "/status"},
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "update_state.json"
+            processed = set()
+            with patch("telegram_listener.send_message") as send:
+                self.assertTrue(
+                    process_update(
+                        update,
+                        "fixture-token",
+                        "fixture-chat",
+                        processed_update_ids=processed,
+                        state_file=state_file,
+                    )
+                )
+                self.assertFalse(
+                    process_update(
+                        update,
+                        "fixture-token",
+                        "fixture-chat",
+                        processed_update_ids=processed,
+                        state_file=state_file,
+                    )
+                )
+
+            send.assert_called_once()
+            self.assertEqual(_load_processed_update_ids(state_file), {42})
+            self.assertEqual(state_file.stat().st_mode & 0o777, 0o600)
+
+    def test_optional_allowed_user_id_restricts_group_commands(self):
+        update = {
+            "update_id": 43,
+            "message": {
+                "chat": {"id": "fixture-group", "type": "group"},
+                "from": {"id": 99},
+                "text": "/status",
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener.send_message"
+        ) as send:
+            self.assertTrue(
+                process_update(
+                    update,
+                    "fixture-token",
+                    "fixture-group",
+                    allowed_user_id="100",
+                    processed_update_ids=set(),
+                    state_file=Path(directory) / "update_state.json",
+                )
+            )
+
+        send.assert_not_called()
 
 
 if __name__ == "__main__":

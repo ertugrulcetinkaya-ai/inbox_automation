@@ -88,6 +88,7 @@ def _meeting_to_digest_record(
         "end_sort_minutes": end_sort_minutes,
         "uid": meeting.uid,
         "organizer": meeting.organizer,
+        "thread_id": meeting.thread_id,
         "location": meeting.location,
         "join_url": meeting.join_url,
         "status": meeting.status,
@@ -227,6 +228,7 @@ def _semantic_meeting_from_date_hit(
     return Meeting(
         title=subject or "Başlıksız toplantı",
         organizer=record.get("sender", "") or "Bilinmeyen gönderen",
+        thread_id=str(record.get("thread_id") or ""),
         start_at=start_at,
         end_at=end_at,
         status=status,
@@ -332,6 +334,7 @@ def extract_meetings(
                     Meeting(
                         title=subject or "Başlıksız toplantı",
                         organizer=record.get("sender", "") or "Bilinmeyen gönderen",
+                        thread_id=str(record.get("thread_id") or ""),
                         start_at=received_date or start_date,
                         status="CANCELLED",
                         source_message_id=record.get("source_message_id", ""),

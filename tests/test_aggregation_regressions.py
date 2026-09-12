@@ -117,6 +117,93 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
 
         self.assertEqual(digest.count("Proje toplantısı"), 2)
 
+    def test_date_only_semantic_cancellation_suppresses_original_timed_meeting(self):
+        original = {
+            "sender": "Organizer <organizer@example.com>",
+            "subject": "Satış toplantısı",
+            "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+        }
+        cancellation = {
+            "sender": "Different display name <organizer@example.com>",
+            "subject": "Satış toplantısı iptali",
+            "content": "15 Eylül 2026 tarihindeki toplantımız iptal edilmiştir.",
+        }
+
+        digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
+
+        self.assertIn("Bugün veya sonrasında toplantı yok.", digest)
+        self.assertNotIn("Satış toplantısı", digest)
+
+    def test_thread_cancellation_can_change_sender_and_subject(self):
+        original = {
+            "thread_id": "gmail-thread-1",
+            "sender": "Organizer <organizer@example.com>",
+            "subject": "Satış toplantısı",
+            "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+        }
+        cancellation = {
+            "thread_id": "gmail-thread-1",
+            "sender": "Calendar Service <calendar@example.com>",
+            "subject": "Etkinlik iptal bildirimi",
+            "content": "15 Eylül 2026 tarihindeki etkinlik iptal edilmiştir.",
+        }
+
+        digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
+
+        self.assertIn("Bugün veya sonrasında toplantı yok.", digest)
+        self.assertNotIn("Satış toplantısı", digest)
+
+    def test_date_only_cancellation_from_different_sender_does_not_suppress(self):
+        original = {
+            "sender": "Organizer <one@example.com>",
+            "subject": "Satış toplantısı",
+            "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+        }
+        unrelated_cancellation = {
+            "sender": "Another Organizer <two@example.com>",
+            "subject": "Satış toplantısı iptali",
+            "content": "15 Eylül 2026 tarihindeki toplantımız iptal edilmiştir.",
+        }
+
+        digest = format_upcoming_digest(
+            [original, unrelated_cancellation],
+            date(2026, 9, 1),
+        )
+
+        self.assertIn("15 Eylül 2026", digest)
+        self.assertIn("Satış toplantısı", digest)
+
+    def test_multiple_vcalendars_keep_method_scope_per_calendar(self):
+        record = {
+            "sender": "Calendar <calendar@example.com>",
+            "subject": "Calendar update",
+            "content": (
+                "BEGIN:VCALENDAR\n"
+                "METHOD:REQUEST\n"
+                "BEGIN:VEVENT\n"
+                "UID:request-event\n"
+                "DTSTART;TZID=Europe/Istanbul:20260915T100000\n"
+                "SUMMARY:İlk davet\n"
+                "END:VEVENT\n"
+                "END:VCALENDAR\n"
+                "BEGIN:VCALENDAR\n"
+                "METHOD:CANCEL\n"
+                "BEGIN:VEVENT\n"
+                "UID:cancel-event\n"
+                "DTSTART;TZID=Europe/Istanbul:20260916T100000\n"
+                "SUMMARY:İptal daveti\n"
+                "END:VEVENT\n"
+                "END:VCALENDAR\n"
+            ),
+        }
+
+        meetings = parse_ics_meetings(record)
+
+        self.assertEqual(
+            {meeting.uid: meeting.status for meeting in meetings},
+            {"request-event": "CONFIRMED", "cancel-event": "CANCELLED"},
+        )
+
     def test_same_sequence_prefers_newer_source_timestamp(self):
         older = ics_record(
             uid="same-sequence",

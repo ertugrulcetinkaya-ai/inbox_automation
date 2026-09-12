@@ -1,18 +1,13 @@
 """Command-line entry point for the daily digest."""
 
 import argparse
-from datetime import timedelta
 
 from .config import TARGET_EMAIL, local_now, log, reminder_minutes, reminder_window_minutes
 from .delivery.telegram import send_telegram
 from .services.meeting_service import (
-    _collect_meetings,
+    build_digest_result,
     due_reminder_meetings,
-    format_attention_digest,
-    format_digest,
     format_reminder_digest,
-    format_upcoming_digest,
-    format_weekly_digest,
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
 from .services.reminder_state import (
@@ -79,22 +74,18 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
         message = format_reminder_digest(reminder_meetings, now=now)
         meeting_count = len(reminder_meetings)
         log(f"Found {meeting_count} due meeting reminders")
-    elif selected_mode == "weekly":
-        message = format_weekly_digest(records, today)
-        meeting_count = len(_collect_meetings(records, today, today + timedelta(days=6)))
-        log(f"Found {meeting_count} meetings in the 7-day view")
-    elif selected_mode == "attention":
-        message = format_attention_digest(records, today)
-        meeting_count = len(_collect_meetings(records, today))
-        log(f"Checked {meeting_count} upcoming meetings for attention signals")
-    elif selected_mode == "upcoming":
-        message = format_upcoming_digest(records, today)
-        meeting_count = len(_collect_meetings(records, today))
-        log(f"Found {meeting_count} meetings from {today.isoformat()} onward")
-    elif selected_mode == "daily":
-        message = format_digest(records, today)
-        meeting_count = len(_collect_meetings(records, today, today))
-        log(f"Found {meeting_count} meetings for {today.isoformat()}")
+    elif selected_mode in {"weekly", "attention", "upcoming", "daily"}:
+        digest_result = build_digest_result(records, selected_mode, target_date=today)
+        message = digest_result.message
+        meeting_count = digest_result.count
+        if selected_mode == "weekly":
+            log(f"Found {meeting_count} meetings in the 7-day view")
+        elif selected_mode == "attention":
+            log(f"Checked {meeting_count} upcoming meetings for attention signals")
+        elif selected_mode == "upcoming":
+            log(f"Found {meeting_count} meetings from {today.isoformat()} onward")
+        else:
+            log(f"Found {meeting_count} meetings for {today.isoformat()}")
     else:
         log(f"Unknown digest mode: {selected_mode}")
         log("DONE meeting digest (FAILED)")

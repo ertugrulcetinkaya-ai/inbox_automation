@@ -2,6 +2,7 @@ import base64
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mail_digest.sources.gmail.api import GmailApiError, GmailHistoryExpired, GmailNotFound
 from mail_digest.sources.gmail.auth import GmailAuthError
@@ -119,6 +120,23 @@ class GmailSyncTests(unittest.TestCase):
         self.sync.full_sync()
         self.assertEqual(self.ids(), ["new"])
         self.assertEqual(self.store.checkpoint(), "110")
+
+    def test_full_sync_stages_snapshot_in_bounded_batches(self):
+        self.api.listed = ["one", "two", "three", "four", "five"]
+        self.api.messages = {
+            message_id: full_message(message_id)
+            for message_id in self.api.listed
+        }
+        self.sync.stage_batch_size = 2
+
+        with patch.object(self.store, "stage_many", wraps=self.store.stage_many) as stage:
+            self.sync.full_sync()
+
+        self.assertEqual(
+            [len(call.args[0]) for call in stage.call_args_list],
+            [2, 2, 1],
+        )
+        self.assertEqual(self.ids(), sorted(self.api.listed))
 
     def test_full_sync_initial_message_moved_out_is_removed(self):
         self.api.listed = ["moving"]
@@ -292,6 +310,7 @@ class GmailSyncTests(unittest.TestCase):
         self.store = GmailStore(self.path)
         self.assertEqual(self.store.checkpoint(), "90")
         self.assertEqual(self.ids(), ["old"])
+        self.assertEqual(self.store.records()[0]["thread_id"], "t")
 
     def test_replay_same_history_is_idempotent(self):
         self.seed_old()

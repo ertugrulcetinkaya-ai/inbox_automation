@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 from mail_digest.cli import _run_digest
 from mail_digest.services.meeting_service import (
+    build_digest_result,
     due_reminder_meetings,
     format_attention_digest,
     format_digest,
@@ -247,6 +248,31 @@ class MeetingReminderTests(unittest.TestCase):
             self.assertEqual(_run_digest(mode="reminder"), 0)
 
         send.assert_not_called()
+
+
+class DigestResultTests(unittest.TestCase):
+    def test_digest_result_collects_meetings_once_and_exposes_count(self):
+        record = {"subject": "Fixture", "sender": "fixture@example.test"}
+        meeting = {
+            "subject": "Fixture",
+            "sender": "fixture@example.test",
+            "date": date(2026, 8, 24),
+            "time": "10:00",
+            "sort_minutes": 600,
+            "status": "CONFIRMED",
+            "confidence": 1.0,
+        }
+
+        with patch(
+            "mail_digest.services.meeting_service.extract_meetings",
+            return_value=[meeting],
+        ) as extract:
+            result = build_digest_result([record], "daily", target_date=date(2026, 8, 24))
+
+        self.assertEqual(extract.call_count, 1)
+        self.assertEqual(result.count, 1)
+        self.assertEqual(result.meetings, [meeting])
+        self.assertIn("Fixture", result.message)
 
 
 class WeeklyDigestTests(unittest.TestCase):

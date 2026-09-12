@@ -2,19 +2,19 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 
 MeetingDate = date | datetime
 MeetingStatus = Literal["CONFIRMED", "CANCELLED", "RESCHEDULED", "TENTATIVE"]
 
 
-class MeetingOccurrence(TypedDict, total=False):
-    """Typed dictionary used by renderers and reminder selection.
+class MeetingOccurrence(TypedDict):
+    """Canonical mapping returned by meeting extraction.
 
-    The service layer intentionally keeps its established mapping-based API;
-    this type makes that boundary explicit without forcing a broad runtime
-    refactor of the formatting code.
+    The fields needed by every renderer are required. Source metadata and
+    optional lifecycle/display details remain optional so the established
+    mapping-based service API can stay backwards compatible.
     """
 
     subject: str
@@ -22,20 +22,21 @@ class MeetingOccurrence(TypedDict, total=False):
     date: date | None
     time: str
     sort_minutes: int
-    end_sort_minutes: int | None
-    uid: str
-    organizer: str
-    location: str
-    join_url: str
-    status: MeetingStatus
-    sequence: int
-    source_message_id: str
-    confidence: float
-    source_received_at: datetime | None
-    supersedes_start_at: MeetingDate | None
-    recurrence_id: MeetingDate | None
-    schedule_warnings: list[str]
-    _position: int
+    end_sort_minutes: NotRequired[int | None]
+    uid: NotRequired[str]
+    organizer: NotRequired[str]
+    location: NotRequired[str]
+    join_url: NotRequired[str]
+    status: NotRequired[MeetingStatus]
+    sequence: NotRequired[int]
+    source_message_id: NotRequired[str]
+    confidence: NotRequired[float]
+    source_received_at: NotRequired[datetime | None]
+    supersedes_start_at: NotRequired[MeetingDate | None]
+    recurrence_id: NotRequired[MeetingDate | None]
+    thread_id: NotRequired[str]
+    schedule_warnings: NotRequired[list[str]]
+    _position: NotRequired[int]
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,9 @@ class Meeting:
     uid: str = ""
     title: str = ""
     organizer: str = ""
+    # Gmail thread identity is a useful semantic lifecycle fallback when an
+    # invitation and its cancellation use different display names/subjects.
+    thread_id: str = ""
     start_at: MeetingDate | None = None
     end_at: MeetingDate | None = None
     timezone: str = ""

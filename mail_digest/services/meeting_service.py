@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from email.utils import parseaddr
 from zoneinfo import ZoneInfo
 
 from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now
+from ..models import MeetingOccurrence
 from ..parsing.meeting_parser import extract_meetings
 from ..utils import record_source_received_at
 
@@ -18,6 +21,15 @@ TR_OUTPUT_MONTHS = (
 TR_OUTPUT_WEEKDAYS = (
     "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar",
 )
+
+
+@dataclass(frozen=True)
+class DigestResult:
+    """One parsed digest result shared by rendering and CLI telemetry."""
+
+    message: str
+    meetings: list[MeetingOccurrence]
+    count: int
 
 
 def format_date(target_date):
@@ -52,25 +64,58 @@ def _collect_meetings(records, start_date, end_date=None):
     }
 
     def text_key(value):
-        return re.sub(r"\W+", " ", (value or "").casefold()).strip()
+        return re.sub(r"\W+", " ", str(value or "").casefold()).strip()
+
+    lifecycle_subject_suffixes = (
+        "iptal edildi",
+        "iptal edildiği",
+        "iptali",
+        "iptal",
+        "cancellation",
+        "cancelled",
+        "canceled",
+        "cancel",
+        "rescheduled",
+        "ertelendi",
+        "ertelenen",
+    )
 
     def subject_key(meeting):
-        return text_key(meeting.get("subject", ""))
+        normalized = text_key(meeting.get("subject", ""))
+        # Calendar clients frequently change only the subject suffix when
+        # sending a cancellation/update (for example, "Satış toplantısı
+        # iptali"). Strip only known lifecycle suffixes; ordinary subject
+        # words remain part of the semantic identity.
+        for suffix in lifecycle_subject_suffixes:
+            if normalized.endswith(f" {suffix}"):
+                normalized = normalized[: -(len(suffix) + 1)].rstrip()
+                break
+        return normalized
 
     def organizer_key(meeting):
-        return text_key(meeting.get("organizer") or meeting.get("sender", ""))
+        raw_value = meeting.get("organizer") or meeting.get("sender", "")
+        _, address = parseaddr(str(raw_value))
+        return address.casefold().strip() if address else text_key(raw_value)
+
+    def thread_key(meeting):
+        return text_key(meeting.get("thread_id", ""))
 
     def occurrence_parts(meeting, start_at=None):
         if isinstance(start_at, datetime):
             return start_at.date(), start_at.hour * 60 + start_at.minute
         if isinstance(start_at, date):
-            return start_at, 24 * 60
-        return meeting.get("date"), meeting.get("sort_minutes")
+            return start_at, None
+        meeting_date = meeting.get("date")
+        sort_minutes = meeting.get("sort_minutes")
+        if sort_minutes is not None and sort_minutes >= 24 * 60:
+            sort_minutes = None
+        return meeting_date, sort_minutes
 
     def semantic_identity(meeting, start_at=None, allow_date_only=False):
         meeting_date, sort_minutes = occurrence_parts(meeting, start_at)
         if meeting_date is None or sort_minutes is None:
-            return None
+            if meeting_date is None:
+                return None
         if (
             allow_date_only
             and isinstance(start_at, date)
@@ -78,6 +123,32 @@ def _collect_meetings(records, start_date, end_date=None):
         ):
             sort_minutes = None
         return subject_key(meeting), organizer_key(meeting), meeting_date, sort_minutes
+
+    def lifecycle_matches(update, candidate, update_start_at=None):
+        """Match one lifecycle update to one semantic occurrence.
+
+        A Gmail thread is authoritative when both sides have one. When one
+        side lacks a thread (Apple Mail or older cache records), fall back to
+        canonical sender email plus normalized subject family. A date-only
+        lifecycle update deliberately matches any time on that date, while a
+        timed update remains exact.
+        """
+
+        update_date, update_minutes = occurrence_parts(update, update_start_at)
+        candidate_date, candidate_minutes = occurrence_parts(candidate)
+        if update_date is None or candidate_date != update_date:
+            return False
+        if update_minutes is not None and candidate_minutes != update_minutes:
+            return False
+
+        update_thread = thread_key(update)
+        candidate_thread = thread_key(candidate)
+        if update_thread and candidate_thread:
+            return update_thread == candidate_thread
+        return (
+            subject_key(update) == subject_key(candidate)
+            and organizer_key(update) == organizer_key(candidate)
+        )
 
     def event_key(meeting):
         uid = meeting.get("uid", "")
@@ -120,30 +191,20 @@ def _collect_meetings(records, start_date, end_date=None):
             latest_by_event[key] = meeting
 
     resolved = list(latest_by_event.values()) + without_uid
-    # Semantic mail has no authoritative UID. Its lifecycle fallback is still
-    # occurrence-scoped: subject + organizer + date + start time. In
-    # particular, a cancellation must not hide a later recurring meeting with
-    # the same subject, and a reschedule must remove only its old occurrence.
-    cancelled_occurrences = {
-        identity
-        for meeting in without_uid
-        if meeting.get("status") == "CANCELLED"
-        for identity in [semantic_identity(meeting)]
-        if identity is not None and identity[-1] < 24 * 60
-    }
-    rescheduled_occurrences = {
-        identity
+    # Semantic mail has no authoritative UID. Correlate lifecycle messages in
+    # a narrow order: Gmail thread ID first, then canonical sender email plus
+    # subject family, always scoped to the affected occurrence date/time. A
+    # date-only cancellation is an intentional wildcard for time on that date;
+    # it must still be able to suppress the original timed invitation.
+    cancelled_updates = [
+        meeting for meeting in without_uid if meeting.get("status") == "CANCELLED"
+    ]
+    rescheduled_updates = [
+        meeting
         for meeting in without_uid
         if meeting.get("status") == "RESCHEDULED"
-        for identity in [
-            semantic_identity(
-                meeting,
-                meeting.get("supersedes_start_at"),
-                allow_date_only=True,
-            )
-        ]
-        if identity is not None
-    }
+        and meeting.get("supersedes_start_at") is not None
+    ]
 
     unique_meetings = {}
     for meeting in resolved:
@@ -151,15 +212,19 @@ def _collect_meetings(records, start_date, end_date=None):
         if status == "CANCELLED":
             continue
         identity = semantic_identity(meeting) if not meeting.get("uid") else None
-        lifecycle_suppressed = identity in cancelled_occurrences
-        if identity is not None and not lifecycle_suppressed:
-            for superseded in rescheduled_occurrences:
-                if (
-                    superseded[:3] == identity[:3]
-                    and (superseded[3] is None or superseded[3] == identity[3])
-                ):
-                    lifecycle_suppressed = True
-                    break
+        lifecycle_suppressed = any(
+            lifecycle_matches(cancellation, meeting)
+            for cancellation in cancelled_updates
+        )
+        if not lifecycle_suppressed:
+            lifecycle_suppressed = any(
+                lifecycle_matches(
+                    rescheduled,
+                    meeting,
+                    rescheduled.get("supersedes_start_at"),
+                )
+                for rescheduled in rescheduled_updates
+            )
         if status in {"CONFIRMED", "TENTATIVE"} and lifecycle_suppressed:
             continue
         if meeting.get("uid"):
@@ -252,10 +317,7 @@ def _render_attention_section(lines, meetings, include_dates=False, include_week
             lines.append("")
 
 
-def format_digest(records, target_date=None):
-    target_date = target_date or local_now().date()
-    meetings = _collect_meetings(records, target_date, target_date)
-
+def _render_digest(meetings, target_date):
     date_label = format_date(target_date)
     if not meetings:
         return f"📅 {date_label}\nBugün toplantı yok."
@@ -269,10 +331,15 @@ def format_digest(records, target_date=None):
     return "\n".join(lines).rstrip()
 
 
-def format_upcoming_digest(records, start_date=None):
-    start_date = start_date or local_now().date()
-    meetings = _collect_meetings(records, start_date)
+def format_digest(records, target_date=None):
+    target_date = target_date or local_now().date()
+    return _render_digest(
+        _collect_meetings(records, target_date, target_date),
+        target_date,
+    )
 
+
+def _render_upcoming_digest(meetings):
     if not meetings:
         return "📅 Bugün ve sonraki toplantılar\nBugün veya sonrasında toplantı yok."
 
@@ -281,6 +348,11 @@ def format_upcoming_digest(records, start_date=None):
     _render_grouped_meetings(lines, regular)
     _render_attention_section(lines, meetings, include_dates=True)
     return "\n".join(lines).rstrip()
+
+
+def format_upcoming_digest(records, start_date=None):
+    start_date = start_date or local_now().date()
+    return _render_upcoming_digest(_collect_meetings(records, start_date))
 
 
 def _with_schedule_warnings(meetings, short_break_minutes=15):
@@ -314,11 +386,7 @@ def _with_schedule_warnings(meetings, short_break_minutes=15):
     return annotated
 
 
-def format_weekly_digest(records, start_date=None, days=7):
-    start_date = start_date or local_now().date()
-    end_date = start_date + timedelta(days=days - 1)
-    meetings = _with_schedule_warnings(_collect_meetings(records, start_date, end_date))
-
+def _render_weekly_digest(meetings, start_date, end_date):
     if not meetings:
         return (
             f"🗓️ Haftalık toplantılar — {format_date(start_date)} / {format_date(end_date)}\n"
@@ -335,12 +403,16 @@ def format_weekly_digest(records, start_date=None, days=7):
     return "\n".join(lines).rstrip()
 
 
-def format_attention_digest(records, start_date=None):
+def format_weekly_digest(records, start_date=None, days=7):
     start_date = start_date or local_now().date()
+    end_date = start_date + timedelta(days=days - 1)
+    meetings = _with_schedule_warnings(_collect_meetings(records, start_date, end_date))
+    return _render_weekly_digest(meetings, start_date, end_date)
+
+
+def _render_attention_digest(meetings):
     attention = [
-        meeting
-        for meeting in _collect_meetings(records, start_date)
-        if _needs_attention(meeting)
+        meeting for meeting in meetings if _needs_attention(meeting)
     ]
     if not attention:
         return "⚠️ Dikkat gerektirenler\nBugün veya sonrasında dikkat gerektiren toplantı yok."
@@ -348,6 +420,35 @@ def format_attention_digest(records, start_date=None):
     lines = ["⚠️ Dikkat gerektirenler", ""]
     _render_grouped_meetings(lines, attention)
     return "\n".join(lines).rstrip()
+
+
+def format_attention_digest(records, start_date=None):
+    start_date = start_date or local_now().date()
+    return _render_attention_digest(_collect_meetings(records, start_date))
+
+
+def build_digest_result(records, mode="daily", target_date=None, days=7):
+    """Parse records once and return both rendered text and telemetry data."""
+
+    target_date = target_date or local_now().date()
+    if mode == "daily":
+        meetings = _collect_meetings(records, target_date, target_date)
+        message = _render_digest(meetings, target_date)
+    elif mode == "upcoming":
+        meetings = _collect_meetings(records, target_date)
+        message = _render_upcoming_digest(meetings)
+    elif mode == "weekly":
+        end_date = target_date + timedelta(days=days - 1)
+        meetings = _with_schedule_warnings(
+            _collect_meetings(records, target_date, end_date)
+        )
+        message = _render_weekly_digest(meetings, target_date, end_date)
+    elif mode == "attention":
+        meetings = _collect_meetings(records, target_date)
+        message = _render_attention_digest(meetings)
+    else:
+        raise ValueError(f"Unknown digest mode: {mode}")
+    return DigestResult(message=message, meetings=meetings, count=len(meetings))
 
 
 def due_reminder_meetings(

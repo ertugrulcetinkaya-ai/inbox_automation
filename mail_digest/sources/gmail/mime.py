@@ -153,6 +153,36 @@ def _calendar_metadata_signal(parts):
     return False
 
 
+def _calendar_payloads_from_parts(parts, message_id, attachment_loader):
+    """Decode calendar parts already present in a Gmail FULL payload.
+
+    Gmail often includes the calendar body (or an attachment ID) in the FULL
+    response. Prefer that bounded data so a large raw MIME envelope cannot hide
+    an otherwise valid small invitation.
+    """
+
+    payloads = []
+    for part in parts:
+        mime_type = str(part.get("mimeType") or "").casefold()
+        filename = str(part.get("filename") or "").casefold()
+        if mime_type != "text/calendar" and not filename.endswith(".ics"):
+            continue
+        try:
+            payload = _decode_text_part(
+                part,
+                message_id,
+                attachment_loader,
+                max_bytes=MAX_ICS_BYTES,
+            )
+        except GmailApiError:
+            raise
+        except (KeyError, LookupError, MessageStructureError, TypeError, UnicodeError, ValueError):
+            continue
+        if payload:
+            payloads.append(payload)
+    return payloads
+
+
 def _calendar_payloads_from_raw_source(raw_text):
     """Extract only calendar parts from a bounded raw MIME message."""
 
@@ -243,21 +273,34 @@ def normalize_message(message, attachment_loader, raw_loader):
                 break
     content = limit_utf8_bytes(sanitize_content(content), MAX_BODY_BYTES)
 
-    calendar_signal = _calendar_metadata_signal(parts) or any(
+    calendar_parts = [
+        part
+        for part in parts
+        if str(part.get("mimeType") or "").casefold() == "text/calendar"
+        or str(part.get("filename") or "").casefold().endswith(".ics")
+    ]
+    calendar_signal = bool(calendar_parts) or any(
         marker in content.casefold() for marker in ICS_TEXT_MARKERS
     )
     raw_source = ""
     if calendar_signal:
         try:
-            raw_response = raw_loader(message_id)
-            raw_bytes = decode_base64url(
-                (raw_response or {}).get("raw", ""),
-                max_bytes=MAX_RAW_MIME_BYTES,
+            calendar_payloads = _calendar_payloads_from_parts(
+                calendar_parts,
+                message_id,
+                attachment_loader,
             )
-            raw_text = raw_bytes.decode(
-                "utf-8", errors="replace"
-            )
-            raw_source = "\n".join(_calendar_payloads_from_raw_source(raw_text))
+            if not calendar_payloads:
+                raw_response = raw_loader(message_id)
+                raw_bytes = decode_base64url(
+                    (raw_response or {}).get("raw", ""),
+                    max_bytes=MAX_RAW_MIME_BYTES,
+                )
+                raw_text = raw_bytes.decode(
+                    "utf-8", errors="replace"
+                )
+                calendar_payloads = _calendar_payloads_from_raw_source(raw_text)
+            raw_source = "\n".join(calendar_payloads)
             raw_source = limit_utf8_bytes(sanitize_content(raw_source), MAX_ICS_BYTES)
         except GmailApiError:
             raise

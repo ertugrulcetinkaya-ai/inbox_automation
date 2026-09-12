@@ -99,14 +99,30 @@ class GmailMimeTests(unittest.TestCase):
         self.assertEqual(self.attachment_calls, [("m1", "body-1")])
 
     def test_calendar_metadata_selectively_loads_raw(self):
-        for part in (
-            payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR")),
-            payload(mime_type="application/octet-stream", filename="invite.ICS"),
-        ):
-            with self.subTest(part=part):
-                record = self.normalize(message(payload(parts=[part])))
-                self.assertTrue(record["raw_source"])
-                self.assertEqual(self.raw_calls, ["m1"])
+        direct = self.normalize(message(payload(
+            parts=[payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR"))]
+        )))
+        self.assertTrue(direct["raw_source"])
+        self.assertEqual(self.raw_calls, [])
+
+        fallback = self.normalize(message(payload(
+            parts=[payload(mime_type="application/octet-stream", filename="invite.ICS")]
+        )))
+        self.assertTrue(fallback["raw_source"])
+        self.assertEqual(self.raw_calls, ["m1"])
+
+    def test_calendar_attachment_id_is_decoded_without_raw_mime_fetch(self):
+        part = payload(mime_type="application/octet-stream", filename="invite.ics")
+        part["body"] = {"attachmentId": "calendar-1"}
+
+        record = self.normalize(
+            message(payload(parts=[part])),
+            {"calendar-1": {"data": b64("BEGIN:VCALENDAR")}},
+        )
+
+        self.assertIn("BEGIN:VCALENDAR", record["raw_source"])
+        self.assertEqual(self.attachment_calls, [("m1", "calendar-1")])
+        self.assertEqual(self.raw_calls, [])
 
     def test_inline_calendar_marker_loads_raw(self):
         root = payload(parts=[payload(mime_type="text/plain", data=b64("BEGIN:VCALENDAR\nBEGIN:VEVENT"))])
@@ -148,7 +164,7 @@ class GmailMimeTests(unittest.TestCase):
                 lambda *_: {},
             )
 
-        calendar = payload(parts=[payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR"))])
+        calendar = payload(parts=[payload(mime_type="text/calendar")])
         with self.assertRaises(GmailApiError):
             normalize_message(
                 message(calendar),
@@ -212,9 +228,7 @@ class GmailMimeTests(unittest.TestCase):
         self.assertEqual(meetings[0]["date"], date(2026, 9, 13))
 
     def test_raw_cache_value_keeps_only_calendar_payload(self):
-        root = payload(
-            parts=[payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR"))]
-        )
+        root = payload(parts=[payload(mime_type="text/calendar")])
         raw_value = (
             "Content-Type: multipart/mixed; boundary=x\n\n"
             "--x\nContent-Type: text/plain\n\nPRIVATE BODY\n"
@@ -242,7 +256,7 @@ class GmailMimeTests(unittest.TestCase):
 
     @patch("mail_digest.sources.gmail.mime.MAX_RAW_MIME_BYTES", 8)
     def test_oversized_raw_mime_is_not_cached(self):
-        root = payload(parts=[payload(mime_type="text/calendar", data=b64("BEGIN:VCALENDAR"))])
+        root = payload(parts=[payload(mime_type="text/calendar")])
         raw = "Content-Type: text/calendar\n\nBEGIN:VCALENDAR\nEND:VCALENDAR"
 
         record = normalize_message(
@@ -252,6 +266,19 @@ class GmailMimeTests(unittest.TestCase):
         )
 
         self.assertEqual(record["raw_source"], "")
+
+    @patch("mail_digest.sources.gmail.mime.MAX_RAW_MIME_BYTES", 8)
+    def test_direct_calendar_part_survives_oversized_raw_mime(self):
+        calendar = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:direct\nEND:VEVENT\nEND:VCALENDAR"
+        root = payload(parts=[payload(mime_type="text/calendar", data=b64(calendar))])
+
+        record = normalize_message(
+            message(root),
+            lambda *_: {},
+            lambda *_: {"raw": b64("x" * 100)},
+        )
+
+        self.assertIn("UID:direct", record["raw_source"])
 
     def test_critical_internal_date_or_labels_failure_aborts(self):
         for value in (

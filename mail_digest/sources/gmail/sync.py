@@ -9,6 +9,7 @@ from .mime import MessageStructureError, normalize_message
 
 
 WINDOW_MS = 30 * 86400 * 1000
+STAGE_BATCH_SIZE = 100
 
 
 class GmailSyncError(RuntimeError):
@@ -43,11 +44,21 @@ def _affected_ids(history_pages):
 
 
 class GmailSynchronizer:
-    def __init__(self, api, store, now_ms=None, max_full_attempts=2):
+    def __init__(
+        self,
+        api,
+        store,
+        now_ms=None,
+        max_full_attempts=2,
+        stage_batch_size=STAGE_BATCH_SIZE,
+    ):
         self.api = api
         self.store = store
         self.now_ms = now_ms or (lambda: int(time.time() * 1000))
         self.max_full_attempts = max_full_attempts
+        if stage_batch_size <= 0:
+            raise ValueError("stage_batch_size must be positive")
+        self.stage_batch_size = stage_batch_size
 
     def _normalize(self, message):
         return normalize_message(
@@ -86,28 +97,40 @@ class GmailSynchronizer:
                 raise GmailSyncError("Gmail profile did not contain historyId")
             self.store.clear_staging()
             try:
-                snapshot_records = []
+                snapshot_batch = []
                 for message_id in self.api.iter_message_ids():
                     operation, payload = self._current_operation(message_id, cutoff_ms)
                     if operation == "upsert":
-                        snapshot_records.append(payload)
+                        snapshot_batch.append(payload)
+                        if len(snapshot_batch) >= self.stage_batch_size:
+                            self.store.stage_many(snapshot_batch)
+                            snapshot_batch = []
+                if snapshot_batch:
+                    self.store.stage_many(snapshot_batch)
                 affected, new_history_id = _affected_ids(
                     self.api.iter_history(str(start_history_id))
                 )
-                affected_records = []
-                deleted_ids = []
+                affected_batch = []
+                deleted_batch = []
                 for message_id in sorted(affected):
                     operation, payload = self._current_operation(message_id, cutoff_ms)
                     if operation == "upsert":
-                        affected_records.append(payload)
+                        affected_batch.append(payload)
+                        if len(affected_batch) >= self.stage_batch_size:
+                            self.store.stage_many(affected_batch)
+                            affected_batch = []
                     else:
-                        deleted_ids.append(payload)
-                # All network calls complete before either short transaction.
-                # This avoids one BEGIN/COMMIT cycle per message without
-                # holding a SQLite transaction across Gmail requests.
-                self.store.stage_many(snapshot_records)
-                self.store.stage_many(affected_records)
-                self.store.stage_delete_many(deleted_ids)
+                        deleted_batch.append(payload)
+                        if len(deleted_batch) >= self.stage_batch_size:
+                            self.store.stage_delete_many(deleted_batch)
+                            deleted_batch = []
+                if affected_batch:
+                    self.store.stage_many(affected_batch)
+                if deleted_batch:
+                    self.store.stage_delete_many(deleted_batch)
+                # Each staging transaction is bounded and contains no Gmail
+                # request. The active cache/checkpoint still change together
+                # only after the complete network reconciliation succeeds.
                 self.store.activate_staging(new_history_id, cutoff_ms)
                 return
             except GmailHistoryExpired as exc:

@@ -14,6 +14,24 @@ TELEGRAM_MAX_RETRY_DELAY_SECONDS = 30.0
 
 
 def _retry_after(response):
+    payload = None
+    json_method = getattr(response, "json", None)
+    if callable(json_method):
+        try:
+            payload = json_method()
+        except (AttributeError, TypeError, ValueError):
+            payload = None
+    if isinstance(payload, dict):
+        parameters = payload.get("parameters")
+        if isinstance(parameters, dict):
+            value = parameters.get("retry_after")
+            try:
+                delay = float(value)
+            except (TypeError, ValueError):
+                delay = None
+            if delay is not None and delay >= 0:
+                return min(delay, TELEGRAM_MAX_RETRY_DELAY_SECONDS)
+
     headers = getattr(response, "headers", {}) or {}
     value = None
     if hasattr(headers, "get"):

@@ -77,7 +77,7 @@ daily / upcoming Telegram digest
 
 Kod akışı katmanlıdır: `sources` Mail erişimini, `parsing` toplantı çıkarımını, `services` iş kurallarını, `delivery` Telegram gönderimini ve `cli` çalışma akışını taşır. Böylece tarih/ICS parser değişiklikleri Telegram gönderim koduna dokunmadan test edilebilir.
 
-Canonical `Meeting` modeli şu alanları taşır: `uid`, `title`, `organizer`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id`, `confidence`, `source_received_at`, `supersedes_start_at` ve `recurrence_id`. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Aynı UID ve SEQUENCE kayıtlarında `source_received_at` freshness tie-break olarak kullanılır; recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur.
+Canonical `Meeting` modeli şu alanları taşır: `uid`, `title`, `organizer`, `thread_id`, `start_at`, `end_at`, `timezone`, `location`, `join_url`, `status`, `source_message_id`, `confidence`, `source_received_at`, `supersedes_start_at` ve `recurrence_id`. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Aynı UID ve SEQUENCE kayıtlarında `source_received_at` freshness tie-break olarak kullanılır; recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur. UID olmayan lifecycle iletilerinde Gmail `thread_id`, canonical gönderen e-postası ve konu ailesi tarih/saat bağlamıyla eşleştirilir; tarih-only iptaller aynı günün zamanlı davetlerini bastırır.
 
 `STATUS:CANCELLED` veya `METHOD:CANCEL` olan ICS etkinlikleri listeye alınmaz. Aynı `UID` için daha yüksek `SEQUENCE` değerine sahip kayıt geçerli kabul edilir; böylece tarih değişikliği ve iptal mailleri eski daveti bastırır. Semantic metinde `iptal`, `ertelendi/rescheduled` ve `tentative` durumları da sınıflandırılır. `DTSTART;TZID=...`, UTC (`Z`) ve tarih-only ICS değerleri desteklenir; UTC zamanları Telegram özeti için Europe/Istanbul saatine çevrilir.
 
@@ -96,6 +96,14 @@ Telegram bilgileri `~/.hermes_local_automation/telegram.env` dosyasında tutulur
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
+# Optional: restrict group commands to one Telegram user id.
+TELEGRAM_ALLOWED_USER_ID=your_user_id
+```
+
+Bu dosya yalnızca sahibi tarafından okunabilir olmalıdır:
+
+```bash
+chmod 600 ~/.hermes_local_automation/telegram.env
 ```
 
 ```bash
@@ -108,7 +116,7 @@ python3 -m venv .venv
 ortamının transitive runtime bağımlılıklarını exact sürümlerle taşır; CI lock
 dosyasını kurup onun tamamını audit eder.
 
-Apple Mail yalnızca yerel rollback çalıştıracaksanız açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası değiştirilebilir. İsteğe bağlı Company Reporting komutları, aynı Python ortamında kurulu bir paket/adapter üzerinden yüklenir; listener başka bir checkout'u `sys.path` ile çalışma zamanında enjekte etmez.
+Apple Mail yalnızca yerel rollback çalıştıracaksanız açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası değiştirilebilir. İsteğe bağlı Company Reporting komutları, aynı Python ortamında kurulu bir paket/adapter üzerinden yüklenir; listener başka bir checkout'u `sys.path` ile çalışma zamanında enjekte etmez. Bağımsız listener kullanılıyorsa işlenmiş Telegram update kimlikleri varsayılan olarak `~/.hermes_local_automation/telegram/update_state.json` dosyasında kalıcı tutulur; `TELEGRAM_UPDATE_STATE_FILE` ile değiştirilebilir.
 
 ## Gmail API kurulumu ve production kullanımı
 

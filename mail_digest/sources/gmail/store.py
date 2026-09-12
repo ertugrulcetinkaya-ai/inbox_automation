@@ -169,6 +169,7 @@ class GmailStore:
             {
                 "account": "ertugrul@cetinkayalar.com",
                 "mailbox": "INBOX",
+                "thread_id": row["thread_id"],
                 "sender": row["sender"],
                 "subject": row["subject"],
                 "date": row["date"],
