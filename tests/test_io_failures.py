@@ -368,7 +368,8 @@ class TelegramUpdateStateTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "telegram_listener.run_digest", return_value=None
+            "telegram_listener._run_digest_for_command",
+            return_value=(True, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."),
         ) as run_digest, patch("telegram_listener.send_message") as send:
             self.assertTrue(
                 process_update(
@@ -388,22 +389,28 @@ class TelegramUpdateStateTests(unittest.TestCase):
             "update_id": 46,
             "message": {"chat": {"id": "fixture-chat"}, "text": "/bugun"},
         }
-        response = "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin."
+        responses = (
+            "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin.",
+            "Özet çalıştırılamadı: fixture failure",
+        )
 
-        with tempfile.TemporaryDirectory() as directory, patch(
-            "telegram_listener.run_digest", return_value=response
-        ), patch("telegram_listener.send_message") as send:
-            self.assertTrue(
-                process_update(
-                    update,
-                    "fixture-token",
-                    "fixture-chat",
-                    processed_update_ids=set(),
-                    state_file=Path(directory) / "update_state.json",
-                )
-            )
+        for response in responses:
+            with self.subTest(response=response[:12]), tempfile.TemporaryDirectory() as directory:
+                with patch(
+                    "telegram_listener._run_digest_for_command",
+                    return_value=(False, response),
+                ), patch("telegram_listener.send_message") as send:
+                    self.assertTrue(
+                        process_update(
+                            update,
+                            "fixture-token",
+                            "fixture-chat",
+                            processed_update_ids=set(),
+                            state_file=Path(directory) / "update_state.json",
+                        )
+                    )
 
-        send.assert_called_once_with("fixture-token", "fixture-chat", response)
+                send.assert_called_once_with("fixture-token", "fixture-chat", response)
 
     def test_update_is_dispatched_once_and_persisted(self):
         update = {

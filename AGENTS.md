@@ -29,7 +29,7 @@
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.
 - Preserve both Turkish-character and ASCII Telegram command aliases.
-- When a listener digest command succeeds, do not send an extra confirmation after the digest; continue sending error and already-running responses.
+- `telegram_listener.run_digest()` retains its success text contract for external callers; the listener's command path suppresses only that duplicate confirmation and sends failures or lock-contention responses.
 - Telegram messages are limited to 3,500 characters per part; split at line breaks when possible and hard-cut only a line longer than the limit.
 - CLI and listener entry points best-effort rotate `PROJECT_ROOT/logs/*.log` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.

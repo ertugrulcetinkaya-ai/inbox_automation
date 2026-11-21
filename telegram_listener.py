@@ -141,26 +141,39 @@ def run_prepare_report_session():
     except Exception as e:
         return f"SYS oturumu hazırlanamadi: {str(e)[:200] or 'unknown error'}"
 
-def run_digest(upcoming=False, mode=None):
+def _run_digest_for_command(upcoming=False, mode=None) -> tuple[bool, str]:
     try:
         if mode is None:
             exit_code = execute_digest(upcoming=upcoming)
         else:
             exit_code = execute_digest(mode=mode)
     except DigestAlreadyRunning:
-        return "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin."
+        return False, "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin."
     except Exception as exc:
-        return f"Özet çalıştırılamadı: {str(exc)[:200] or 'bilinmeyen hata'}"
+        return False, f"Özet çalıştırılamadı: {str(exc)[:200] or 'bilinmeyen hata'}"
 
     if exit_code != 0:
-        return f"Özet çalıştırılamadı (çıkış kodu: {exit_code})."
+        return False, f"Özet çalıştırılamadı (çıkış kodu: {exit_code})."
 
-    return None
+    if mode == "weekly":
+        return True, "Haftalık toplantı özeti Telegram sohbetinize gönderildi."
+    if mode == "attention":
+        return True, "Dikkat gerektiren toplantılar Telegram sohbetinize gönderildi."
+    if upcoming:
+        return True, "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi."
+    return True, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."
+
+
+def run_digest(upcoming=False, mode=None):
+    """Run one digest and preserve the listener's public response text."""
+
+    _, response = _run_digest_for_command(upcoming=upcoming, mode=mode)
+    return response
 
 
 def _send_digest_command_response(token, chat_id, **kwargs):
-    response = run_digest(**kwargs)
-    if response:
+    ok, response = _run_digest_for_command(**kwargs)
+    if not ok:
         send_message(token, chat_id, response)
 
 

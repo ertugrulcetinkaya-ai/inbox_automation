@@ -32,7 +32,7 @@ Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan k
 | Dikkat gerektiren toplantılar | `/dikkat` | `/attention` |
 | Servis durumu | `/durum` | `/status` |
 
-Komutla özet başarıyla gönderildiğinde listener ikinci bir onay mesajı göndermez. Hata ve özetin hâlihazırda hazırlanmakta olduğunu bildiren yanıtlar kullanıcıya iletilir.
+`telegram_listener.run_digest()` dış çağıranlara günlük, gelecek, haftalık ve dikkat özeti için başarı metni döndürür. Listener'ın kendi komut yolu bu başarı onayını tekrar göndermez; hata ve özetin hâlihazırda hazırlanmakta olduğunu bildiren yanıtları iletir.
 
 Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonlarında bölünür; tek bir satır sınırı aşıyorsa yalnızca o satır sert sınırdan kesilir.
 

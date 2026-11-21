@@ -95,10 +95,13 @@ except DigestAlreadyRunning:
 
 class TelegramListenerLockIntegrationTests(unittest.TestCase):
     @patch("telegram_listener.execute_digest", return_value=0)
-    def test_listener_uses_the_shared_cli_service_without_success_confirmation(self, execute):
+    def test_listener_run_digest_preserves_success_response_contract(self, execute):
         from telegram_listener import run_digest as listener_run_digest
 
-        self.assertIsNone(listener_run_digest())
+        self.assertEqual(
+            listener_run_digest(),
+            "Bugünün toplantı özeti Telegram sohbetinize gönderildi.",
+        )
         execute.assert_called_once_with(upcoming=False)
 
     @patch("telegram_listener.execute_digest", side_effect=DigestAlreadyRunning)
@@ -112,12 +115,25 @@ class TelegramListenerLockIntegrationTests(unittest.TestCase):
     def test_listener_routes_weekly_and_attention_modes_through_shared_service(self, execute):
         from telegram_listener import run_digest as listener_run_digest
 
-        self.assertIsNone(listener_run_digest(mode="weekly"))
+        self.assertEqual(
+            listener_run_digest(mode="weekly"),
+            "Haftalık toplantı özeti Telegram sohbetinize gönderildi.",
+        )
         execute.assert_called_once_with(mode="weekly")
 
         execute.reset_mock()
-        self.assertIsNone(listener_run_digest(mode="attention"))
+        self.assertEqual(
+            listener_run_digest(mode="attention"),
+            "Dikkat gerektiren toplantılar Telegram sohbetinize gönderildi.",
+        )
         execute.assert_called_once_with(mode="attention")
+
+        execute.reset_mock()
+        self.assertEqual(
+            listener_run_digest(upcoming=True),
+            "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi.",
+        )
+        execute.assert_called_once_with(upcoming=True)
 
 
 if __name__ == "__main__":
