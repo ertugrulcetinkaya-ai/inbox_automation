@@ -125,6 +125,18 @@ class ArchitectureTests(unittest.TestCase):
             self.assertIn("__PYTHON_PATH__", template)
             self.assertNotIn("/Users/ertugrulcetinkaya/Projects/mail_unread_digest", template)
 
+    def test_deploy_script_mktemp_calls_use_portable_templates(self):
+        project_root = Path(main.__file__).parent
+        deploy_script = (project_root / "scripts" / "deploy_mac_mini.sh").read_text(
+            encoding="utf-8"
+        )
+        mktemp_calls = [line.strip() for line in deploy_script.splitlines() if "mktemp" in line]
+
+        self.assertTrue(mktemp_calls)
+        for call in mktemp_calls:
+            with self.subTest(call=call):
+                self.assertIn("XXXXXX", call)
+
 
 if __name__ == "__main__":
     unittest.main()

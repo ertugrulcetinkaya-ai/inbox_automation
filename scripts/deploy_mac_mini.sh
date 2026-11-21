@@ -79,8 +79,8 @@ else
     "$VENV_PYTHON" -m compileall -q main.py telegram_listener.py mail_digest tests scripts
 fi
 
-PREFLIGHT_LOCK="$(mktemp -t inbox_preflight_lock)"
-PREFLIGHT_OUTPUT="$(mktemp -t inbox_preflight_output)"
+PREFLIGHT_LOCK="$(mktemp "${TMPDIR:-/tmp}/inbox_preflight_lock.XXXXXX")"
+PREFLIGHT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/inbox_preflight_output.XXXXXX")"
 trap 'rm -f "$PREFLIGHT_LOCK" "$PREFLIGHT_OUTPUT"' EXIT
 
 PREFLIGHT_STATUS=0
