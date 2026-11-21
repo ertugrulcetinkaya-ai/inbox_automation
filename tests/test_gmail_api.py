@@ -1,6 +1,10 @@
 import json
+import os
+import subprocess
+import sys
 import unittest
-from unittest.mock import Mock
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from googleapiclient.errors import HttpError
 
@@ -12,10 +16,15 @@ class Response(dict):
     reason = "error"
 
 
-def http_error(status, reason="backendError"):
+def http_error(status, reason="backendError", headers=None, uri=None):
     response = Response()
     response.status = status
-    return HttpError(response, json.dumps({"error": {"errors": [{"reason": reason}]}}).encode())
+    response.update(headers or {})
+    return HttpError(
+        response,
+        json.dumps({"error": {"errors": [{"reason": reason}]}}).encode(),
+        uri=uri,
+    )
 
 
 class Request:
@@ -68,6 +77,41 @@ class FakeBatchService:
 
 
 class GmailApiTests(unittest.TestCase):
+    def test_batch_settings_are_shared_and_environment_configurable(self):
+        environment = os.environ.copy()
+        environment.update(
+            {"GMAIL_BATCH_SIZE": "4", "GMAIL_BATCH_PAUSE_SECONDS": "0.25"}
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from mail_digest.config import GMAIL_BATCH_SIZE, GMAIL_BATCH_PAUSE_SECONDS; "
+                "from mail_digest.sources.gmail.sync import FETCH_BATCH_SIZE; "
+                "print(GMAIL_BATCH_SIZE, FETCH_BATCH_SIZE, GMAIL_BATCH_PAUSE_SECONDS)",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "4 4 0.25")
+
+        environment["GMAIL_BATCH_SIZE"] = "51"
+        invalid = subprocess.run(
+            [sys.executable, "-c", "import mail_digest.config"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("GMAIL_BATCH_SIZE must be between 1 and 50", invalid.stderr)
+
     def test_transient_failure_retries_with_bound(self):
         outcomes = [http_error(503), {"ok": True}]
         sleeps = []
@@ -81,6 +125,43 @@ class GmailApiTests(unittest.TestCase):
         self.assertEqual(api._execute(lambda: Request(rate_outcomes)), {"ok": True})
         with self.assertRaises(GmailApiError):
             api._execute(lambda: Request([http_error(401)]))
+
+    def test_http_error_message_has_only_status_and_reason(self):
+        private_uri = (
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/"
+            "synthetic-message-id?format=full"
+        )
+        error = http_error(
+            403,
+            "rateLimitExceeded",
+            uri=private_uri,
+        )
+        api = GmailApi(None, sleep=lambda _: None)
+
+        with self.assertRaises(GmailApiError) as raised:
+            api._execute(lambda: Request([error] * 6))
+
+        message = str(raised.exception)
+        self.assertEqual(
+            message,
+            "Gmail API request failed (HTTP 403 rateLimitExceeded)",
+        )
+        self.assertNotIn("synthetic-message-id", message)
+        self.assertNotIn("googleapis.com", message)
+
+    def test_network_error_message_contains_exception_type_only(self):
+        api = GmailApi(None, max_attempts=1, sleep=lambda _: None)
+
+        with self.assertRaises(GmailApiError) as raised:
+            api._execute(
+                lambda: Request([TimeoutError("private-request-details")])
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            "Gmail API network request failed (TimeoutError)",
+        )
+        self.assertNotIn("private-request-details", str(raised.exception))
 
     def test_message_and_history_404_have_distinct_semantics(self):
         api = GmailApi(None, max_attempts=1)
@@ -123,16 +204,37 @@ class GmailApiTests(unittest.TestCase):
             historyTypes=["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
         )
 
-    def test_batch_fetches_in_groups_of_fifty(self):
-        ids = [f"synthetic-{index}" for index in range(101)]
+    def test_batch_fetches_in_configured_groups(self):
+        from mail_digest.config import GMAIL_BATCH_SIZE
+
+        ids = [f"synthetic-{index}" for index in range(2 * GMAIL_BATCH_SIZE + 1)]
         service = FakeBatchService(
             {message_id: [{"id": message_id}] for message_id in ids}
         )
 
-        results = GmailApi(service).get_messages_batch(ids)
+        results = GmailApi(service, sleep=lambda _: None).get_messages_batch(ids)
 
-        self.assertEqual(len(results), 101)
-        self.assertEqual(service.batch_sizes, [50, 50, 1])
+        self.assertEqual(len(results), len(ids))
+        self.assertEqual(
+            service.batch_sizes,
+            [GMAIL_BATCH_SIZE, GMAIL_BATCH_SIZE, 1],
+        )
+
+    def test_batch_pause_is_injected_between_groups(self):
+        from mail_digest.config import GMAIL_BATCH_SIZE
+
+        ids = [f"synthetic-{index}" for index in range(GMAIL_BATCH_SIZE + 1)]
+        service = FakeBatchService(
+            {message_id: [{"id": message_id}] for message_id in ids}
+        )
+        sleeps = []
+
+        results = GmailApi(
+            service, sleep=sleeps.append, batch_pause_seconds=0.25
+        ).get_messages_batch(ids)
+
+        self.assertEqual(len(results), len(ids))
+        self.assertEqual(sleeps, [0.25])
 
     def test_batch_marks_individual_404_as_not_found_result(self):
         service = FakeBatchService({"gone": [http_error(404)], "live": [{"id": "live"}]})
@@ -142,7 +244,7 @@ class GmailApiTests(unittest.TestCase):
         self.assertIsInstance(results["gone"], GmailNotFound)
         self.assertEqual(results["live"], {"id": "live"})
 
-    def test_batch_retries_rate_limit_and_server_errors_individually(self):
+    def test_batch_retries_rate_limits_in_smaller_batches_and_other_transients_singly(self):
         transient_errors = [
             http_error(429),
             http_error(503),
@@ -150,19 +252,80 @@ class GmailApiTests(unittest.TestCase):
         ]
         ids = ["rate-429", "server-503", "rate-403"]
         service = FakeBatchService(
-            dict(zip(ids, [[error] for error in transient_errors])),
             {
-                message_id: [error, {"id": message_id}]
-                for message_id, error in zip(ids, transient_errors)
+                "rate-429": [transient_errors[0], {"id": "rate-429"}],
+                "server-503": [transient_errors[1]],
+                "rate-403": [transient_errors[2], {"id": "rate-403"}],
             },
+            {"server-503": [transient_errors[1], {"id": "server-503"}]},
         )
         sleeps = []
 
-        results = GmailApi(service, max_attempts=2, sleep=sleeps.append).get_messages_batch(ids)
+        with patch("mail_digest.sources.gmail.api.random.uniform", return_value=0):
+            results = GmailApi(
+                service,
+                max_attempts=2,
+                sleep=sleeps.append,
+                batch_pause_seconds=0,
+            ).get_messages_batch(ids)
 
         self.assertEqual(set(results), set(ids))
-        self.assertEqual(len(sleeps), 3)
-        self.assertEqual(service.batch_sizes, [3])
+        self.assertEqual(sleeps, [0.25, 1])
+        self.assertEqual(service.batch_sizes, [3, 1, 1])
+        self.assertEqual(service.individual_outcomes["server-503"], [])
+        self.assertEqual(len(service.individual_outcomes["rate-429"]), 1)
+        self.assertEqual(len(service.individual_outcomes["rate-403"]), 1)
+
+    def test_rate_limited_batch_items_retry_together_in_a_half_sized_batch(self):
+        ids = ["a", "b", "c", "d"]
+        rate_limit = http_error(403, "rateLimitExceeded")
+        service = FakeBatchService(
+            {
+                "a": [{"id": "a"}],
+                "b": [{"id": "b"}],
+                "c": [rate_limit, {"id": "c"}],
+                "d": [rate_limit, {"id": "d"}],
+            }
+        )
+        sleeps = []
+
+        with patch("mail_digest.sources.gmail.api.random.uniform", return_value=0):
+            results = GmailApi(
+                service, sleep=sleeps.append, batch_pause_seconds=0
+            ).get_messages_batch(ids)
+
+        self.assertEqual(set(results), set(ids))
+        self.assertEqual(service.batch_sizes, [4, 2])
+        self.assertEqual(sleeps, [1])
+
+    def test_persistent_rate_limited_item_raises_after_six_batch_attempts(self):
+        rate_limit = http_error(429)
+        service = FakeBatchService({"stuck": [rate_limit] * 6})
+        sleeps = []
+
+        with patch("mail_digest.sources.gmail.api.random.uniform", return_value=0):
+            with self.assertRaises(GmailApiError):
+                GmailApi(
+                    service, sleep=sleeps.append, batch_pause_seconds=0
+                ).get_messages_batch(["stuck"])
+
+        self.assertEqual(service.batch_sizes, [1] * 6)
+        self.assertEqual(sleeps, [1, 2, 4, 8, 16])
+
+    def test_retry_after_sets_the_minimum_rate_limit_delay(self):
+        outcomes = [
+            http_error(429, headers={"Retry-After": "9"}),
+            {"ok": True},
+        ]
+        sleeps = []
+
+        with patch("mail_digest.sources.gmail.api.random.uniform", return_value=0):
+            result = GmailApi(None, sleep=sleeps.append)._execute(
+                lambda: Request(outcomes)
+            )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(sleeps, [9.0])
 
     def test_batch_nontransient_failure_raises(self):
         service = FakeBatchService({"unauthorized": [http_error(401)]})

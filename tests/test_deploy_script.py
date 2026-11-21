@@ -23,6 +23,9 @@ class DeployScriptTests(unittest.TestCase):
         preflight_ok=True,
         preflight_output="",
         fail_bootstrap_number=0,
+        broken_pip_shebang=False,
+        python_check_failure="",
+        quality_tools_fail=False,
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -80,6 +83,8 @@ class DeployScriptTests(unittest.TestCase):
         fake_python.write_text(
             "#!/usr/bin/env bash\n"
             "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_PYTHON_LOG\"\n"
+            "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == import && \"$*\" == '-c import sys' ]]; then exit 1; fi\n"
+            "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == pip && \"$*\" == '-m pip --version' ]]; then exit 1; fi\n"
             "if [[ \"$*\" == 'main.py --upcoming --dry-run' ]]; then\n"
             "  printf '%s\\n' \"${MAIL_DIGEST_LOCK_FILE:-}\" > \"$DEPLOY_TEST_PYTHON_LOG.preflight_lock\"\n"
             "  printf '%s\\n' \"$DEPLOY_TEST_PREFLIGHT_OUTPUT\"\n"
@@ -89,10 +94,16 @@ class DeployScriptTests(unittest.TestCase):
             encoding="utf-8",
         )
         fake_pip = repo / ".venv" / "bin" / "pip"
-        fake_pip.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        pip_shebang = "#!/definitely/missing/python\n" if broken_pip_shebang else "#!/usr/bin/env bash\n"
+        fake_pip.write_text(pip_shebang + "exit 0\n", encoding="utf-8")
         for name in ("ruff", "pyright"):
             executable = repo / ".venv" / "bin" / name
-            executable.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            executable.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == --version && \"$DEPLOY_TEST_QUALITY_VERSION_FAIL\" == true ]]; then exit 1; fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
             executable.chmod(0o755)
         for executable in (git_stub, launchctl_stub, fake_python, fake_pip, fake_bin / "python"):
             executable.chmod(0o755)
@@ -112,6 +123,8 @@ class DeployScriptTests(unittest.TestCase):
                 "DEPLOY_TEST_PREFLIGHT_EXIT": "0" if preflight_ok else "1",
                 "DEPLOY_TEST_PREFLIGHT_OUTPUT": preflight_output,
                 "DEPLOY_TEST_FAIL_BOOTSTRAP_NUMBER": str(fail_bootstrap_number),
+                "DEPLOY_TEST_PYTHON_CHECK_FAILURE": python_check_failure,
+                "DEPLOY_TEST_QUALITY_VERSION_FAIL": "true" if quality_tools_fail else "false",
                 "DEPLOY_TEST_GIT_LOG": str(git_log),
                 "DEPLOY_TEST_LAUNCHCTL_LOG": str(launchctl_log),
                 "DEPLOY_TEST_PYTHON_LOG": str(python_log),
@@ -164,6 +177,55 @@ class DeployScriptTests(unittest.TestCase):
         self.assertNotEqual(str(preflight_lock), "/tmp/mail_unread_digest.lock")
         self.assertNotIn("successful preflight output must stay hidden", result.stdout)
         self.assertNotIn("successful preflight output must stay hidden", result.stderr)
+
+    def test_broken_pip_shebang_is_bypassed_using_python_module_pip(self):
+        result, _, python_log = self.run_deploy(broken_pip_shebang=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = python_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("-m pip --version", calls)
+        self.assertIn("-m pip install -r requirements.lock", calls)
+
+    def test_failed_python_pip_check_reports_manual_venv_rebuild(self):
+        result, _, python_log = self.run_deploy(
+            broken_pip_shebang=True,
+            python_check_failure="pip",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(
+            result.stderr,
+            r"\.venv bozuk; yeniden oluşturun: mv \.venv \.venv\.broken-\d{8} "
+            r"&& python3\.11 -m venv \.venv",
+        )
+        calls = python_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("-m pip --version", calls)
+        self.assertNotIn("-m pip install -r requirements.lock", calls)
+
+    def test_failed_python_import_check_reports_manual_venv_rebuild(self):
+        result, _, python_log = self.run_deploy(
+            broken_pip_shebang=True,
+            python_check_failure="import",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(".venv bozuk; yeniden oluşturun:", result.stderr)
+        calls = python_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("-c import sys", calls)
+        self.assertNotIn("-m pip --version", calls)
+        self.assertNotIn("-m pip install -r requirements.lock", calls)
+
+    def test_quality_tools_must_pass_version_check(self):
+        result, _, python_log = self.run_deploy(quality_tools_fail=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("running unittest and compileall only", result.stdout)
+        calls = python_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("-m unittest discover -s tests -p test_*.py", calls)
+        self.assertIn(
+            "-m compileall -q main.py telegram_listener.py mail_digest tests scripts",
+            calls,
+        )
 
     def test_gmail_preflight_failure_stops_before_plist_or_launchctl(self):
         preflight_output = "\n".join(f"preflight-line-{index:02d}" for index in range(25))

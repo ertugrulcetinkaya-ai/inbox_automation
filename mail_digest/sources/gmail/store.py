@@ -71,6 +71,25 @@ class GmailStore:
         ).fetchone()
         return row[0] if row else None
 
+    def retention_upgrade_last_attempt_ms(self):
+        row = self.connection.execute(
+            "SELECT value FROM metadata WHERE key='retention_upgrade_last_attempt_ms'"
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
+
+    def set_retention_upgrade_last_attempt_ms(self, timestamp_ms):
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('retention_upgrade_last_attempt_ms', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(int(timestamp_ms)),),
+            )
+
     def has_message(self, message_id):
         row = self.connection.execute(
             "SELECT 1 FROM messages WHERE gmail_message_id=?", (message_id,)

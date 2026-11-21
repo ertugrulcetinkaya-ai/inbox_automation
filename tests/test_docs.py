@@ -55,7 +55,10 @@ def _literal_env_names(tree):
         function_name = function.id if isinstance(function, ast.Name) else ""
         if isinstance(function, ast.Attribute):
             function_name = function.attr
-        if function_name not in {"get", "getenv", "_positive_int_env"} or not node.args:
+        if function_name not in {
+            "get", "getenv", "_positive_int_env", "_bounded_int_env",
+            "_nonnegative_float_env",
+        } or not node.args:
             continue
         first_arg = node.args[0]
         if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):

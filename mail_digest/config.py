@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+import math
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -198,6 +199,32 @@ def _positive_int_env(name, default):
     return value
 
 
+def _bounded_int_env(name, default, minimum, maximum):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _nonnegative_float_env(name, default):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a non-negative number") from exc
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be a non-negative number")
+    return value
+
+
 def reminder_minutes():
     return _positive_int_env("MEETING_REMINDER_MINUTES", REMINDER_MINUTES_DEFAULT)
 
@@ -207,3 +234,9 @@ def reminder_window_minutes():
         "MEETING_REMINDER_WINDOW_MINUTES",
         REMINDER_WINDOW_MINUTES_DEFAULT,
     )
+
+
+GMAIL_BATCH_SIZE = _bounded_int_env("GMAIL_BATCH_SIZE", 10, 1, 50)
+GMAIL_BATCH_PAUSE_SECONDS = _nonnegative_float_env(
+    "GMAIL_BATCH_PAUSE_SECONDS", 1.0
+)
