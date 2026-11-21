@@ -103,9 +103,11 @@ def _numeric_dot_token_kind(text, match):
     nearby_after_end = min(len(text), match.end() + 12)
 
     def has_context(pattern, start, end):
+        window_start = max(0, start - 64)
+        window_end = min(len(text), end + 64)
         return any(
             start <= context.start() and context.end() <= end
-            for context in pattern.finditer(text)
+            for context in pattern.finditer(text, window_start, window_end)
         )
 
     if has_context(DATE_CONTEXT_RE, nearby_before_start, match.start()) or has_context(

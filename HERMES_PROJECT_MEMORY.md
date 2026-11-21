@@ -20,6 +20,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - AppleScript transport must preserve content line breaks and may carry raw MIME source; do not flatten ICS content before Python parsing.
 - Apple Mail rollback intentionally reads every message body so neutral-subject meetings are not dropped; this has a known performance cost and previously exceeded 180 seconds locally. Gmail is the production transport and avoids that rollback limitation.
 - Dotted numeric tokens are classified before extraction: `10.30` and `10.30–11.30` remain times, while `15.08`/`15.08.2026` remain dates; ambiguous `DD.MM` tokens require nearby date context.
+- Dotted numeric context lookup is bounded to a 64-character margin around each token; preserve classification results without rescanning the full message per token. The 100-message synthetic parser performance test fixes the daily result count, and `scripts/bench_parser.py` measures daily, weekly, upcoming, and reminder parsing.
 - Weekday expressions are anchored to the received date: bare `Cuma` resolves to the next occurrence, `bu/this` keeps the next practical occurrence, and `önümüzdeki/next` requires a strictly future occurrence when the message arrives on that weekday.
 - Yearless dates use the target year first; when that candidate is at least 60 days in the past, the next-year candidate is evaluated. For example, `5 Ocak` on 20 December resolves to 5 January of the following year, while a recent past date stays in the current year.
 - Relative phrases such as "bugün" and "yarın" are anchored to the message received date.
@@ -57,16 +58,22 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - SECURITY: Do not print or expose the Telegram bot token.
 - `mail_digest/cli.py`: Sends the daily meeting digest; `main.py` delegates to it for launchd compatibility.
 - `mail_digest/services/lock.py`: Owns the shared non-blocking `fcntl.flock()` lock at `/tmp/mail_unread_digest.lock`; both launchd and Telegram command execution must use `mail_digest.cli.run_digest()`.
+- `mail_digest/services/log_rotation.py`: CLI and standalone listener startup best-effort rotate only their own named launchd logs in `PROJECT_ROOT/logs` when larger than 5 MiB, retaining at most three numbered archives and swallowing rotation errors.
 - `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, `/hafta`/`/haftalik`/`/haftalık`/`/week`, `/dikkat`/`/attention`, and `/durum`; ASCII aliases remain supported. Group/supergroup chats require `TELEGRAM_ALLOWED_USER_ID`; private chats retain their existing behavior. Optional Company Reporting commands use an installed adapter rather than runtime `sys.path` injection. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
+- `telegram_listener.run_digest()` preserves its public success text for external callers; only the listener command route suppresses the duplicate confirmation. Error and lock-contention responses are still sent.
+- Telegram delivery caps each message at 3,500 characters, preferring line breaks and hard-cutting only oversized individual lines; concatenating chunks must preserve the original text.
 
 ## Automation (launchd)
 - `launchd/*.plist.template`: Machine-independent launchd templates.
 - `scripts/install_launchd.py`: Renders templates using the current checkout and user paths.
 - The summary agent runs daily at 08:00. The standalone listener is optional and must not share a Telegram bot with Hermes Gateway.
 - The reminder agent runs every five minutes and calls `main.py --reminder`; `MEETING_REMINDER_MINUTES` defaults to 15 and `MEETING_REMINDER_WINDOW_MINUTES` defaults to 5.
+- The standalone listener launchd template uses `ThrottleInterval=30`; keep its label stable and do not load/restart it as part of code changes.
 - The 08:00 launchd invocation, reminder invocation, and Telegram commands share the same `run_digest()` lock. Do not use `exists()`/`touch()` checks or unlink the lock file; `flock` releases automatically after normal exit, exceptions, and process termination.
 - `logs/`: Contains output and error logs.
+- Digest logs may include counts and source names, but must omit the mailbox address and message content.
 
 ## Operational Rules
 - Any change to automation, launchd, Telegram, or Mail access requires explicit APPLY.
 - Prefer read-only tests before installing or restarting launchd services.
+- Run `./scripts/check.sh` locally for compile, unit, Ruff, Pyright, and diff checks; `PYTHON` overrides the interpreter, and missing Ruff/Pyright prints the venv activation instruction. Bandit is conditional on installation. `pip-audit` runs only via `./scripts/check.sh --audit`. GitHub Actions uses only manual `workflow_dispatch`, not push or pull-request triggers.

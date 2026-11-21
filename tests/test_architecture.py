@@ -1,5 +1,9 @@
+from contextlib import redirect_stdout
+from datetime import datetime
+from io import StringIO
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import main
 from mail_digest.models import Meeting
@@ -23,8 +27,33 @@ class ArchitectureTests(unittest.TestCase):
         project_root = Path(main.__file__).parent
         listener = (project_root / "telegram_listener.py").read_text(encoding="utf-8")
 
-        self.assertIn("from mail_digest.config import load_env", listener)
+        self.assertIn("from mail_digest.config import PROJECT_ROOT, load_env", listener)
         self.assertNotIn("def load_env(", listener)
+
+    def test_ci_workflow_is_manually_triggered_only(self):
+        project_root = Path(main.__file__).parent
+        workflow = (project_root / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+        trigger_section = workflow.split("permissions:", maxsplit=1)[0]
+        self.assertIn("on:\n  workflow_dispatch:", trigger_section)
+        self.assertNotIn("push:", trigger_section)
+        self.assertNotIn("pull_request:", trigger_section)
+
+    def test_digest_logs_message_count_without_mailbox_identity(self):
+        from mail_digest.cli import _run_digest
+        from mail_digest.config import TARGET_EMAIL
+
+        output = StringIO()
+        with patch("mail_digest.cli.fetch_mail", return_value=[]), patch(
+            "mail_digest.cli.selected_source_name", return_value="synthetic"
+        ), patch("mail_digest.cli.local_now", return_value=datetime(2026, 11, 21, 9)), redirect_stdout(
+            output
+        ):
+            self.assertEqual(_run_digest(dry_run=True), 0)
+
+        self.assertNotIn(TARGET_EMAIL, output.getvalue())
 
     def _applescript_source(self):
         script_path = Path(main.__file__).parent / "mail_fetcher.applescript"

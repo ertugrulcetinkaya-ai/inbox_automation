@@ -29,6 +29,9 @@
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.
 - Preserve both Turkish-character and ASCII Telegram command aliases.
+- `telegram_listener.run_digest()` retains its success text contract for external callers; the listener's command path suppresses only that duplicate confirmation and sends failures or lock-contention responses.
+- Telegram messages are limited to 3,500 characters per part; split at line breaks when possible and hard-cut only a line longer than the limit.
+- CLI and listener entry points best-effort rotate only their own named launchd logs in `PROJECT_ROOT/logs` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
 
 ## Runtime ownership
@@ -44,6 +47,9 @@
 ## Change and verification rules
 
 - Prefer small, explicit patches and keep unrelated working-tree changes untouched.
+- Dotted numeric date/time context checks must scan only the token's nearby window so parser cost does not grow with the full message length per token; preserve parser results and keep the 100-message synthetic performance regression test.
+- Run `./scripts/check.sh` locally for compile, unit, lint, type, and whitespace checks; set `PYTHON` to override its interpreter. It runs Bandit only when installed and explains how to activate the venv when Ruff or Pyright is missing. Run `./scripts/check.sh --audit` only for an explicitly requested dependency audit. GitHub Actions is manually triggered with `workflow_dispatch`.
+- Digest logs may include message counts and source names, but must omit the mailbox address and message content.
 - Add or update tests for parser, command, routing, or deployment changes.
 - Keep parser coverage broad: maintain table-driven date/time/weekday/lifecycle cases, sanitized fixtures under `tests/fixtures/`, duplicate/update regressions, and Mail/Telegram failure-path tests. Fixtures must not contain real personal data or credentials.
 - Run the relevant unit tests, Python compilation, and `git diff --check` before committing.

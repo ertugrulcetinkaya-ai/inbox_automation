@@ -32,6 +32,10 @@ Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan k
 | Dikkat gerektiren toplantılar | `/dikkat` | `/attention` |
 | Servis durumu | `/durum` | `/status` |
 
+`telegram_listener.run_digest()` dış çağıranlara günlük, gelecek, haftalık ve dikkat özeti için başarı metni döndürür. Listener'ın kendi komut yolu bu başarı onayını tekrar göndermez; hata ve özetin hâlihazırda hazırlanmakta olduğunu bildiren yanıtları iletir.
+
+Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonlarında bölünür; tek bir satır sınırı aşıyorsa yalnızca o satır sert sınırdan kesilir.
+
 İleri tarihli listeyi yerel olarak kontrol etmek için:
 
 ```bash
@@ -52,6 +56,7 @@ Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan k
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
 - `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları hash kimlikleriyle kaydeder ve son başarılı reminder taramasını cursor olarak tutarak aynı toplantı için tekrar bildirim gönderilmesini önler.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
+- `mail_digest/services/log_rotation.py`: CLI ve bağımsız listener başlarken yalnızca kendi launchd log adlarını `PROJECT_ROOT/logs` altında, 5 MiB'tan büyükler için en fazla üç arşivle ve hata yutacak şekilde döndürür.
 - `mail_digest/delivery/telegram.py`: yalnızca Telegram gönderim katmanını içerir; parser katmanına bağımlı değildir.
 - `mail_digest/cli.py`: günlük digest CLI akışını ve ortak kilitli `run_digest()` servis çağrısını yönetir.
 - `telegram_listener.py`: Yalnızca bağımsız kurulumlarda kullanılan Telegram listener'ıdır.
@@ -176,20 +181,25 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Mac Mini tek runtime/production makinesidir.
 - Company Reporting/Hermes aynı Telegram botunu yönetirken bağımsız `telegram_listener.py` çalıştırılmaz; ikinci Telegram polling süreci oluşturulmaz.
 - 08:00 launchd çalışması ile Telegram komutu aynı `run_digest()` akışını kullanır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Dosyanın diskte kalması stale-lock oluşturmaz.
+- CLI ve listener başlangıcında yalnızca o sürecin launchd logları döndürülür; iki süreç diğerinin loglarına dokunmaz ve dosya sistemi hataları digest akışını durdurmaz. Listener launchd işi `ThrottleInterval=30` ile çökme döngülerini sınırlar.
 - Beş dakikalık hatırlatma görevi de aynı `run_digest()` ve `flock` akışını kullanır; günlük özet veya Telegram komutuyla çakışırsa güvenli biçimde o turu atlar.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
 - Mac Mini deploy'u `company_reporting_hub/scripts/deploy_mac_mini.sh` ile yapılır.
+- Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz.
 
 ## Test
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
-.venv/bin/python -m py_compile main.py telegram_listener.py mail_digest/**/*.py tests/*.py
-.venv/bin/pyright
-.venv/bin/ruff check mail_digest main.py telegram_listener.py scripts tests
-git diff --check
+source .venv/bin/activate
+./scripts/check.sh
 ```
 
+Betik `PYTHON` değişkeniyle farklı bir Python yorumlayıcısı alabilir ve `ruff` ya da `pyright` bulunmadığında venv'i etkinleştirme yönergesi verir.
+
+İsteğe bağlı runtime bağımlılık denetimi yalnızca açıkça istendiğinde çalıştırılır: `./scripts/check.sh --audit`. `bandit` kuruluysa yerel betik onu CI ile aynı `-s B108,B608` istisnalarıyla çalıştırır. GitHub Actions `push` ve `pull_request` üzerinde otomatik çalışmaz; yalnızca `workflow_dispatch` ile elle tetiklenir.
+
 Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixture'ları ve dış sistem hata akışlarını içerir. `tests/fixtures/` altında kişisel veri içermeyen 20 örnek bulunur; AppleScript timeout/bozuk çıktı, Telegram HTTP veya `ok:false` cevabı, 10.30/09.30/14.30 saatleri, tarih biçimleri, yıl geçişi, hafta günleri, quoted reply, iptal, erteleme ve çoklu tarih senaryoları test edilir.
+
+Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular; `python scripts/bench_parser.py` daily, weekly, upcoming ve reminder parser sürelerini ölçer.
 
 Mail erişimi ve Telegram gönderimi salt-okunur operasyon mantığıyla tasarlanmıştır: mesaj silme, taşıma, işaretleme, cevaplama, yönlendirme veya taslak oluşturma yapılmaz.

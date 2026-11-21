@@ -179,6 +179,35 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
         self.assertTrue(send_telegram("x" * 7001))
         self.assertEqual(post.call_count, 3)
 
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_long_message_splits_on_line_boundaries(self, load_env, post):
+        load_env.return_value = self.env
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+        lines = ["a" * 1200, "b" * 1200, "c" * 1200]
+        message = "\n".join(lines)
+
+        self.assertTrue(send_telegram(message))
+
+        chunks = [call.kwargs["json"]["text"] for call in post.call_args_list]
+        self.assertEqual("".join(chunks), message)
+        self.assertTrue(all(len(chunk) <= 3500 for chunk in chunks))
+        self.assertEqual(chunks, ["\n".join(lines[:2]) + "\n", lines[2]])
+
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_single_oversized_line_is_hard_cut_at_limit(self, load_env, post):
+        load_env.return_value = self.env
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+        message = "x" * 3501 + "\nend"
+
+        self.assertTrue(send_telegram(message))
+
+        chunks = [call.kwargs["json"]["text"] for call in post.call_args_list]
+        self.assertEqual(chunks, ["x" * 3500, "x\nend"])
+        self.assertEqual("".join(chunks), message)
+        self.assertTrue(all(len(chunk) <= 3500 for chunk in chunks))
+
     @patch("mail_digest.delivery.telegram.time.sleep")
     @patch("mail_digest.delivery.telegram.requests.post")
     @patch("mail_digest.delivery.telegram.load_env")
@@ -332,6 +361,57 @@ class TelegramListenerDeliveryFailureTests(unittest.TestCase):
 
 
 class TelegramUpdateStateTests(unittest.TestCase):
+    def test_successful_digest_command_does_not_send_a_second_message(self):
+        update = {
+            "update_id": 45,
+            "message": {"chat": {"id": "fixture-chat"}, "text": "/bugun"},
+        }
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener._run_digest_for_command",
+            return_value=(True, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."),
+        ) as run_digest, patch("telegram_listener.send_message") as send:
+            self.assertTrue(
+                process_update(
+                    update,
+                    "fixture-token",
+                    "fixture-chat",
+                    processed_update_ids=set(),
+                    state_file=Path(directory) / "update_state.json",
+                )
+            )
+
+        run_digest.assert_called_once_with()
+        send.assert_not_called()
+
+    def test_digest_in_progress_message_is_still_sent(self):
+        update = {
+            "update_id": 46,
+            "message": {"chat": {"id": "fixture-chat"}, "text": "/bugun"},
+        }
+        responses = (
+            "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin.",
+            "Özet çalıştırılamadı: fixture failure",
+        )
+
+        for response in responses:
+            with self.subTest(response=response[:12]), tempfile.TemporaryDirectory() as directory:
+                with patch(
+                    "telegram_listener._run_digest_for_command",
+                    return_value=(False, response),
+                ), patch("telegram_listener.send_message") as send:
+                    self.assertTrue(
+                        process_update(
+                            update,
+                            "fixture-token",
+                            "fixture-chat",
+                            processed_update_ids=set(),
+                            state_file=Path(directory) / "update_state.json",
+                        )
+                    )
+
+                send.assert_called_once_with("fixture-token", "fixture-chat", response)
+
     def test_update_is_dispatched_once_and_persisted(self):
         update = {
             "update_id": 42,

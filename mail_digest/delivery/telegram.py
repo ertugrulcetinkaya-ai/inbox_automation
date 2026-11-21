@@ -11,6 +11,23 @@ from ..config import load_env, log
 TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
 TELEGRAM_MAX_ATTEMPTS = 3
 TELEGRAM_MAX_RETRY_DELAY_SECONDS = 30.0
+TELEGRAM_MESSAGE_MAX_CHARS = 3500
+
+
+def _split_message(message):
+    """Split on line breaks where possible and hard-cut oversized lines."""
+
+    chunks = []
+    start = 0
+    while start < len(message):
+        end = min(start + TELEGRAM_MESSAGE_MAX_CHARS, len(message))
+        if end < len(message):
+            newline = message.rfind("\n", start, end)
+            if newline >= start:
+                end = newline + 1
+        chunks.append(message[start:end])
+        start = end
+    return chunks
 
 
 def _retry_delay_value(value):
@@ -112,7 +129,7 @@ def send_telegram(message, sleep=None):
         log("Missing Telegram credentials in env file.")
         return False
 
-    chunks = [message[i:i + 3500] for i in range(0, len(message), 3500)]
+    chunks = _split_message(message)
     for index, chunk in enumerate(chunks):
         if not _send_chunk(
             token,
