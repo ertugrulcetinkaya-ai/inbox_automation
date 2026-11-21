@@ -1,8 +1,10 @@
+import ast
+import plistlib
 from contextlib import redirect_stdout
 from datetime import datetime
 from io import StringIO
-import unittest
 from pathlib import Path
+import unittest
 from unittest.mock import patch
 
 import main
@@ -124,6 +126,18 @@ class ArchitectureTests(unittest.TestCase):
             self.assertIn("__PROJECT_ROOT__", template)
             self.assertIn("__PYTHON_PATH__", template)
             self.assertNotIn("/Users/ertugrulcetinkaya/Projects/mail_unread_digest", template)
+
+    def test_all_launchd_templates_enable_unbuffered_python_output(self):
+        project_root = Path(main.__file__).parent
+        template_paths = sorted(project_root.glob("launchd/*.plist.template"))
+
+        self.assertEqual(len(template_paths), 3)
+        for template_path in template_paths:
+            with self.subTest(template=template_path.name):
+                template = plistlib.loads(template_path.read_bytes())
+                self.assertEqual(
+                    template["EnvironmentVariables"].get("PYTHONUNBUFFERED"), "1"
+                )
 
     def test_deploy_script_mktemp_calls_use_portable_templates(self):
         project_root = Path(main.__file__).parent
