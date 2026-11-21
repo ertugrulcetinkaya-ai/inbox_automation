@@ -198,6 +198,7 @@ Uygulama ayarları aşağıdaki ortam değişkenlerinden veya Telegram kimlik bi
 | `TELEGRAM_CHAT_ID` | Hedef Telegram sohbeti; yalnızca `TELEGRAM_ENV_FILE` içinden okunur. |
 | `TELEGRAM_ALLOWED_USER_ID` | Grup/süpergrup komutlarını kullanabilecek kullanıcı; grup için zorunludur. |
 | `TELEGRAM_UPDATE_STATE_FILE` | Polling update kimlik state'i; varsayılan `~/.hermes_local_automation/telegram/update_state.json`. |
+| `LISTENER_CONFLICT_BACKOFF_SECONDS` | Telegram getUpdates 409 çakışmasından sonra bekleme; varsayılan `300` saniye. Test ve kontrollü kullanımda `0` verilebilir. |
 
 Telegram token'ını veya gerçek sohbet/kullanıcı kimliklerini kaynak koda, loglara ya da fixture'lara yazmayın.
 

@@ -23,6 +23,7 @@ from mail_digest.services.log_rotation import LISTENER_LOG_NAMES, rotate_logs
 
 
 MAX_PROCESSED_UPDATE_IDS = 4096
+LISTENER_CONFLICT_BACKOFF_SECONDS = 300
 GET_UPDATES_CONFLICT_MESSAGE = (
     "Başka bir Telegram poller/webhook bu botu kullanıyor; listener durduruldu."
 )
@@ -34,6 +35,16 @@ GROUP_CHAT_TYPES = {"group", "supergroup"}
 
 class TelegramConfigurationError(RuntimeError):
     """The listener configuration is unsafe for the addressed chat type."""
+
+
+def _listener_conflict_backoff_seconds():
+    configured = os.environ.get("LISTENER_CONFLICT_BACKOFF_SECONDS")
+    if configured is None:
+        return LISTENER_CONFLICT_BACKOFF_SECONDS
+    try:
+        return max(0, int(configured))
+    except ValueError:
+        return LISTENER_CONFLICT_BACKOFF_SECONDS
 
 
 def _run_company_report_command(text):
@@ -299,6 +310,7 @@ def main():
                 response = requests.get(url, params=params, timeout=35)
                 if response.status_code == 409:
                     print(GET_UPDATES_CONFLICT_MESSAGE)
+                    time.sleep(_listener_conflict_backoff_seconds())
                     return 1
                 response.raise_for_status()
                 data = response.json()

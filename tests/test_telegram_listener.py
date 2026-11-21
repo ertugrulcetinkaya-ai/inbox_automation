@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -16,6 +17,7 @@ from telegram_listener import (
     GET_UPDATES_CONFLICT_MESSAGE,
     TelegramConfigurationError,
     TelegramUpdateStateError,
+    _listener_conflict_backoff_seconds,
     _load_processed_update_ids,
     main,
     process_update,
@@ -159,7 +161,8 @@ class TelegramListenerCommandTests(unittest.TestCase):
         ) as get, patch("telegram_listener.send_text") as send, patch(
             "telegram_listener.build_status_report", return_value="Local status"
         ), redirect_stdout(output):
-            result = main()
+            with patch.dict(os.environ, {"LISTENER_CONFLICT_BACKOFF_SECONDS": "0"}):
+                result = main()
 
             state = json.loads((Path(directory) / "state.json").read_text(encoding="utf-8"))
 
@@ -201,13 +204,19 @@ class TelegramListenerPollingTests(unittest.TestCase):
         ), patch("telegram_listener._load_processed_update_ids", return_value=set()), patch(
             "telegram_listener.requests.get", return_value=response
         ) as get, patch("telegram_listener.time.sleep") as sleep, redirect_stdout(output):
-            result = main()
+            with patch.dict(os.environ, {"LISTENER_CONFLICT_BACKOFF_SECONDS": "0"}):
+                result = main()
 
         self.assertEqual(result, 1)
         self.assertIn(GET_UPDATES_CONFLICT_MESSAGE, output.getvalue())
         get.assert_called_once()
         response.raise_for_status.assert_not_called()
-        sleep.assert_not_called()
+        sleep.assert_called_once_with(0)
+
+    def test_conflict_backoff_defaults_to_300_seconds(self):
+        with patch.dict(os.environ):
+            os.environ.pop("LISTENER_CONFLICT_BACKOFF_SECONDS", None)
+            self.assertEqual(_listener_conflict_backoff_seconds(), 300)
 
     def test_polling_exception_redacts_token_before_retry(self):
         output = StringIO()
@@ -222,12 +231,14 @@ class TelegramListenerPollingTests(unittest.TestCase):
             "telegram_listener.requests.get",
             side_effect=[RuntimeError(f"failed at {token}"), conflict],
         ), patch("telegram_listener.time.sleep") as sleep, redirect_stdout(output):
-            result = main()
+            with patch.dict(os.environ, {"LISTENER_CONFLICT_BACKOFF_SECONDS": "0"}):
+                result = main()
 
         self.assertEqual(result, 1)
         self.assertNotIn(token, output.getvalue())
         self.assertIn("[REDACTED]", output.getvalue())
-        sleep.assert_called_once_with(5)
+        sleep.assert_any_call(5)
+        sleep.assert_any_call(0)
 
     def test_missing_credentials_exits_nonzero(self):
         output = StringIO()
