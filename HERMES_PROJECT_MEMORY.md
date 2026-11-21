@@ -60,6 +60,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - `mail_digest/services/lock.py`: Owns the shared non-blocking `fcntl.flock()` lock at `/tmp/mail_unread_digest.lock`; both launchd and Telegram command execution must use `mail_digest.cli.run_digest()`.
 - `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, `/hafta`/`/haftalik`/`/haftalık`/`/week`, `/dikkat`/`/attention`, and `/durum`; ASCII aliases remain supported. Group/supergroup chats require `TELEGRAM_ALLOWED_USER_ID`; private chats retain their existing behavior. Optional Company Reporting commands use an installed adapter rather than runtime `sys.path` injection. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
 - A successful listener digest command does not send a second confirmation after the digest. Error and lock-contention responses are still sent.
+- Telegram delivery caps each message at 3,500 characters, preferring line breaks and hard-cutting only oversized individual lines; concatenating chunks must preserve the original text.
 
 ## Automation (launchd)
 - `launchd/*.plist.template`: Machine-independent launchd templates.

@@ -179,6 +179,35 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
         self.assertTrue(send_telegram("x" * 7001))
         self.assertEqual(post.call_count, 3)
 
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_long_message_splits_on_line_boundaries(self, load_env, post):
+        load_env.return_value = self.env
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+        lines = ["a" * 1200, "b" * 1200, "c" * 1200]
+        message = "\n".join(lines)
+
+        self.assertTrue(send_telegram(message))
+
+        chunks = [call.kwargs["json"]["text"] for call in post.call_args_list]
+        self.assertEqual("".join(chunks), message)
+        self.assertTrue(all(len(chunk) <= 3500 for chunk in chunks))
+        self.assertEqual(chunks, ["\n".join(lines[:2]) + "\n", lines[2]])
+
+    @patch("mail_digest.delivery.telegram.requests.post")
+    @patch("mail_digest.delivery.telegram.load_env")
+    def test_single_oversized_line_is_hard_cut_at_limit(self, load_env, post):
+        load_env.return_value = self.env
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+        message = "x" * 3501 + "\nend"
+
+        self.assertTrue(send_telegram(message))
+
+        chunks = [call.kwargs["json"]["text"] for call in post.call_args_list]
+        self.assertEqual(chunks, ["x" * 3500, "x\nend"])
+        self.assertEqual("".join(chunks), message)
+        self.assertTrue(all(len(chunk) <= 3500 for chunk in chunks))
+
     @patch("mail_digest.delivery.telegram.time.sleep")
     @patch("mail_digest.delivery.telegram.requests.post")
     @patch("mail_digest.delivery.telegram.load_env")

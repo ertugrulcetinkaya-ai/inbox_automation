@@ -34,6 +34,8 @@ Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan k
 
 Komutla özet başarıyla gönderildiğinde listener ikinci bir onay mesajı göndermez. Hata ve özetin hâlihazırda hazırlanmakta olduğunu bildiren yanıtlar kullanıcıya iletilir.
 
+Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonlarında bölünür; tek bir satır sınırı aşıyorsa yalnızca o satır sert sınırdan kesilir.
+
 İleri tarihli listeyi yerel olarak kontrol etmek için:
 
 ```bash
