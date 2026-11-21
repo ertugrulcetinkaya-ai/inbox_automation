@@ -3,6 +3,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+import plistlib
 from unittest.mock import patch
 
 from mail_digest.config import PROJECT_ROOT
@@ -70,6 +71,13 @@ class LogRotationTests(unittest.TestCase):
 
         rotate.assert_called_once_with(PROJECT_ROOT / "logs")
         self.assertIn("Missing TELEGRAM_BOT_TOKEN", output.getvalue())
+
+    def test_listener_plist_has_throttle_interval(self):
+        from scripts.install_launchd import TEMPLATES, render_template
+
+        rendered = plistlib.loads(render_template(TEMPLATES["listener"]))
+
+        self.assertEqual(rendered["ThrottleInterval"], 30)
 
 
 if __name__ == "__main__":

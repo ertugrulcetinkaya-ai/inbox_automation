@@ -71,7 +71,9 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - The standalone listener launchd template uses `ThrottleInterval=30`; keep its label stable and do not load/restart it as part of code changes.
 - The 08:00 launchd invocation, reminder invocation, and Telegram commands share the same `run_digest()` lock. Do not use `exists()`/`touch()` checks or unlink the lock file; `flock` releases automatically after normal exit, exceptions, and process termination.
 - `logs/`: Contains output and error logs.
+- Digest logs may include counts and source names, but must omit the mailbox address and message content.
 
 ## Operational Rules
 - Any change to automation, launchd, Telegram, or Mail access requires explicit APPLY.
 - Prefer read-only tests before installing or restarting launchd services.
+- Run `./scripts/check.sh` locally for compile, unit, Ruff, Pyright, and diff checks; Bandit is conditional on installation. `pip-audit` runs only via `./scripts/check.sh --audit`. GitHub Actions uses only manual `workflow_dispatch`, not push or pull-request triggers.

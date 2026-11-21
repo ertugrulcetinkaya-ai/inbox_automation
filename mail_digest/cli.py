@@ -4,7 +4,6 @@ import argparse
 
 from .config import (
     PROJECT_ROOT,
-    TARGET_EMAIL,
     local_now,
     log,
     reminder_minutes,
@@ -44,7 +43,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
         log("DONE meeting digest (FAILED)")
         return 1
 
-    log(f"Processed {len(records)} messages for {TARGET_EMAIL}")
+    log(f"Processed {len(records)} messages")
     now = local_now()
     today = now.date()
     reminder_meetings = []
