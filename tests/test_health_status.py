@@ -261,7 +261,7 @@ class HealthStatusTests(unittest.TestCase):
             }
             with self.subTest(command=command), patch(
                 "telegram_listener.build_status_report", return_value="Local status"
-            ) as report, patch("telegram_listener.send_message") as send:
+            ) as report, patch("telegram_listener.send_text") as send:
                 process_update(
                     update,
                     "fixture-token",

@@ -106,7 +106,7 @@ class LogRotationTests(unittest.TestCase):
         with patch("telegram_listener.rotate_logs") as rotate, patch(
             "telegram_listener.load_env", return_value={}
         ), redirect_stdout(output):
-            main()
+            self.assertEqual(main(), 1)
 
         rotate.assert_called_once_with(
             PROJECT_ROOT / "logs", names=LISTENER_LOG_NAMES

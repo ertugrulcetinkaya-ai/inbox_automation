@@ -1,11 +1,9 @@
 import json
 import os
-import random
 import requests
 import tempfile
 import time
 import warnings
-import asyncio
 from pathlib import Path
 
 # Suppress urllib3 NotOpenSSLWarning
@@ -16,15 +14,18 @@ except ImportError:
     pass
 
 from mail_digest.cli import run_digest as execute_digest
+from mail_digest.commands import MEETING_COMMANDS, meeting_help_text
 from mail_digest.config import PROJECT_ROOT, load_env
+from mail_digest.delivery.telegram import send_text
 from mail_digest.services.lock import DigestAlreadyRunning
 from mail_digest.services.health import build_status_report
 from mail_digest.services.log_rotation import LISTENER_LOG_NAMES, rotate_logs
 
 
-TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
-TELEGRAM_MAX_ATTEMPTS = 3
 MAX_PROCESSED_UPDATE_IDS = 4096
+GET_UPDATES_CONFLICT_MESSAGE = (
+    "Başka bir Telegram poller/webhook bu botu kullanıyor; listener durduruldu."
+)
 DEFAULT_UPDATE_STATE_FILE = (
     Path.home() / ".hermes_local_automation" / "telegram" / "update_state.json"
 )
@@ -35,112 +36,22 @@ class TelegramConfigurationError(RuntimeError):
     """The listener configuration is unsafe for the addressed chat type."""
 
 
-def _retry_delay_value(value):
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        return None
-    try:
-        delay = float(value)
-    except ValueError:
-        return None
-    if delay < 0:
-        return None
-    return min(30.0, delay)
+def _run_company_report_command(text):
+    from mail_digest.integrations.company_reporting import run_company_report_command
+
+    return run_company_report_command(text)
 
 
-def _retry_after(response):
-    payload = None
-    json_method = getattr(response, "json", None)
-    if callable(json_method):
-        try:
-            payload = json_method()
-        except (AttributeError, TypeError, ValueError):
-            payload = None
-    if isinstance(payload, dict):
-        parameters = payload.get("parameters")
-        if isinstance(parameters, dict):
-            delay = _retry_delay_value(parameters.get("retry_after"))
-            if delay is not None:
-                return delay
+def _run_report_session_status():
+    from mail_digest.integrations.company_reporting import run_report_session_status
 
-    headers = getattr(response, "headers", {}) or {}
-    value = None
-    if hasattr(headers, "get"):
-        value = headers.get("Retry-After") or headers.get("retry-after")
-    return _retry_delay_value(value)
+    return run_report_session_status()
 
 
-def _listener_retry_delay(response, attempt):
-    if getattr(response, "status_code", None) == 429:
-        retry_after = _retry_after(response)
-        if retry_after is not None:
-            return retry_after
-    return min(30.0, 0.5 * (2 ** (attempt - 1)) + random.uniform(0, 0.1))
+def _run_prepare_report_session():
+    from mail_digest.integrations.company_reporting import run_prepare_report_session
 
-
-def send_message(token, chat_id, text, sleep=None):
-    sleep = sleep or time.sleep
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    for attempt in range(1, TELEGRAM_MAX_ATTEMPTS + 1):
-        try:
-            response = requests.post(url, json=payload, timeout=10)
-        except Exception as exc:
-            retryable = isinstance(exc, (requests.RequestException, OSError, TimeoutError))
-            if retryable and attempt < TELEGRAM_MAX_ATTEMPTS:
-                sleep(_listener_retry_delay(None, attempt))
-                continue
-            safe_error = str(exc).replace(token, "[REDACTED]")
-            print(f"Error sending Telegram message: {safe_error}")
-            return False
-
-        if response.status_code == 200:
-            try:
-                response_payload = response.json()
-            except (AttributeError, ValueError):
-                response_payload = None
-            if isinstance(response_payload, dict) and response_payload.get("ok") is True:
-                return True
-            print("Error sending Telegram message: invalid response")
-            return False
-
-        if response.status_code in TRANSIENT_HTTP_STATUSES and attempt < TELEGRAM_MAX_ATTEMPTS:
-            sleep(_listener_retry_delay(response, attempt))
-            continue
-        print(f"Error sending Telegram message: HTTP {response.status_code}")
-        return False
-    return False
-
-def run_company_report_command(text):
-    try:
-        from app.company_reports.live_command_router import CompanyReportCommandError, dispatch_company_report_command
-    except ImportError:
-        return "Rapor servisi bu ortamda hazır değil; toplantı komutları yine kullanılabilir."
-
-    try:
-        result = dispatch_company_report_command(text, send=True)
-    except CompanyReportCommandError as exc:
-        return f"Rapor üretilemedi: {str(exc)[:200] or 'unknown error'}"
-    return {"ok": True, "response": result.response, "matched": result.matched}
-
-def run_report_session_status():
-    try:
-        from app.company_reports.portal_browser_worker import PortalBrowserWorker
-        worker = PortalBrowserWorker.instance()
-        ready = asyncio.run(worker.session_ready())
-    except Exception:
-        ready = False
-    return "✅ SYS oturumu aktif." if ready else "⚠️ SYS oturumu yok / MFA gerekiyor."
-
-def run_prepare_report_session():
-    try:
-        from app.company_reports.portal_browser_worker import PortalBrowserWorker
-        worker = PortalBrowserWorker.instance()
-        result = worker.prepare_and_check_session(headed=True)
-        if isinstance(result, dict) and result.get("session_ready"):
-            return "✅ SYS oturumu hazır."
-        return "⚠️ SYS oturumu yok / MFA gerekiyor."
-    except Exception as e:
-        return f"SYS oturumu hazırlanamadi: {str(e)[:200] or 'unknown error'}"
+    return run_prepare_report_session()
 
 def _run_digest_for_command(upcoming=False, mode=None) -> tuple[bool, str]:
     try:
@@ -175,7 +86,7 @@ def run_digest(upcoming=False, mode=None):
 def _send_digest_command_response(token, chat_id, **kwargs):
     ok, response = _run_digest_for_command(**kwargs)
     if not ok:
-        send_message(token, chat_id, response)
+        send_text(token, chat_id, response)
 
 
 class TelegramUpdateStateError(RuntimeError):
@@ -269,7 +180,6 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
     chat = msg.get("chat") if isinstance(msg.get("chat"), dict) else {}
     chat_id_msg = str(chat.get("id"))
     text = msg.get("text", "")
-
     # Only accept commands from the configured chat. Group commands require an
     # explicit operator identity; otherwise any member could invoke commands
     # with external side effects through an accidentally shared chat.
@@ -286,50 +196,47 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
             return
 
     normalized = (text or "").strip().lower().lstrip("/")
-    if normalized in {"komutlar", "help"} or normalized.startswith(("servis", "fatura")):
-        registry_result = run_company_report_command(text)
+    if normalized in {"komutlar", "help"}:
+        reporting_result = _run_company_report_command(text)
+        if isinstance(reporting_result, dict):
+            reporting_help = reporting_result.get("response")
+        else:
+            reporting_help = reporting_result
+        help_text = meeting_help_text()
+        if reporting_help:
+            help_text = f"{help_text}\n\n{reporting_help}"
+        send_text(token, chat_id, help_text)
+        return
+
+    if normalized.startswith(("servis", "fatura")):
+        registry_result = _run_company_report_command(text)
         if isinstance(registry_result, str):
-            send_message(token, chat_id, registry_result)
-        elif (
-            isinstance(registry_result, dict)
-            and registry_result.get("response")
-            and normalized in {"komutlar", "help"}
-        ):
-            send_message(token, chat_id, registry_result["response"])
+            send_text(token, chat_id, registry_result)
         return
 
     if normalized in {"session", "sys_session"}:
-        send_message(token, chat_id, run_report_session_status())
+        send_text(token, chat_id, _run_report_session_status())
         return
 
     if normalized == "session_hazirla":
-        send_message(token, chat_id, "SYS oturumu hazırlanıyor. MFA tamamlayın.")
-        send_message(token, chat_id, run_prepare_report_session())
+        send_text(token, chat_id, "SYS oturumu hazırlanıyor. MFA tamamlayın.")
+        send_text(token, chat_id, _run_prepare_report_session())
         return
 
     command = (text or "").strip().lower()
-    if command in {"/toplantilar", "/toplantılar", "/bugun", "/bugün", "/mail", "/unread"}:
-        print("Command received: /toplantilar or /bugun")
+    mode = MEETING_COMMANDS.get(command)
+    if mode == "daily":
+        print("Command received: meeting digest")
         _send_digest_command_response(token, chat_id)
-    elif command in {
-        "/gelecek_toplantilar",
-        "/gelecek_toplantılar",
-        "/toplantilar_gelecek",
-        "/toplantılar_gelecek",
-        "/sonraki_toplantilar",
-        "/sonraki_toplantılar",
-    }:
-        print("Command received: /gelecek_toplantilar")
+    elif mode == "upcoming":
+        print("Command received: upcoming meeting digest")
         _send_digest_command_response(token, chat_id, upcoming=True)
-    elif command in {"/hafta", "/haftalik", "/haftalık", "/week"}:
-        print("Command received: /hafta")
-        _send_digest_command_response(token, chat_id, mode="weekly")
-    elif command in {"/dikkat", "/attention"}:
-        print("Command received: /dikkat")
-        _send_digest_command_response(token, chat_id, mode="attention")
+    elif mode in {"weekly", "attention"}:
+        print(f"Command received: {mode} meeting digest")
+        _send_digest_command_response(token, chat_id, mode=mode)
     elif command in {"/durum", "/status"}:
-        print("Command received: /durum")
-        send_message(token, chat_id, build_status_report())
+        print("Command received: status")
+        send_text(token, chat_id, build_status_report())
 
 
 def process_update(
@@ -366,6 +273,7 @@ def process_update(
 def main():
     rotate_logs(PROJECT_ROOT / "logs", names=LISTENER_LOG_NAMES)
     print("Starting Telegram Mail Listener...")
+    token = None
     try:
         env = load_env()
         token = env.get("TELEGRAM_BOT_TOKEN")
@@ -374,14 +282,14 @@ def main():
         
         if not token or not chat_id:
             print("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in env file.")
-            return
+            return 1
 
         state_file = _update_state_file(env)
         try:
             processed_update_ids = _load_processed_update_ids(state_file)
         except TelegramUpdateStateError as exc:
-            print(f"Fatal error in listener: {exc}")
-            return
+            print(f"Fatal error in listener: {str(exc).replace(token, '[REDACTED]')}")
+            return 1
 
         offset = 0
         while True:
@@ -389,6 +297,9 @@ def main():
             params = {"offset": offset, "timeout": 30}
             try:
                 response = requests.get(url, params=params, timeout=35)
+                if response.status_code == 409:
+                    print(GET_UPDATES_CONFLICT_MESSAGE)
+                    return 1
                 response.raise_for_status()
                 data = response.json()
                 
@@ -411,15 +322,18 @@ def main():
                     # durable id persistence have completed.
                     offset = max(offset, update_id + 1)
             except (TelegramUpdateStateError, TelegramConfigurationError) as exc:
-                print(f"Fatal error in listener: {exc}")
-                return
-            except Exception as e:
-                safe_error = str(e).replace(token, "[REDACTED]")
+                safe_error = str(exc).replace(token, "[REDACTED]")
+                print(f"Fatal error in listener: {safe_error}")
+                return 1
+            except Exception as exc:
+                safe_error = str(exc).replace(token, "[REDACTED]")
                 print(f"Polling error: {safe_error}")
                 time.sleep(5)
-                
-    except Exception as e:
-        print(f"Fatal error in listener: {e}")
+
+    except Exception as exc:
+        safe_error = str(exc).replace(token, "[REDACTED]") if token else str(exc)
+        print(f"Fatal error in listener: {safe_error}")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

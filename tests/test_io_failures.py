@@ -9,13 +9,12 @@ from unittest.mock import Mock, patch
 
 from main import FIELD_DELIMITER
 from mail_digest.config import SecretFilePermissionError, load_env
-from mail_digest.delivery.telegram import send_telegram
+from mail_digest.delivery.telegram import send_telegram, send_text
 from mail_digest.sources.apple_mail import fetch_mail
 from telegram_listener import (
     TelegramConfigurationError,
     _load_processed_update_ids,
     process_update,
-    send_message as listener_send_message,
 )
 
 
@@ -171,6 +170,18 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
         self.assertTrue(send_telegram("test"))
 
     @patch("mail_digest.delivery.telegram.requests.post")
+    def test_send_text_uses_explicit_token_chat_and_text(self, post):
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+
+        self.assertTrue(send_text("fixture-token", "fixture-chat", "fixture text"))
+
+        post.assert_called_once_with(
+            "https://api.telegram.org/botfixture-token/sendMessage",
+            json={"chat_id": "fixture-chat", "text": "fixture text"},
+            timeout=15,
+        )
+
+    @patch("mail_digest.delivery.telegram.requests.post")
     @patch("mail_digest.delivery.telegram.load_env")
     def test_long_message_is_split_and_all_chunks_must_succeed(self, load_env, post):
         load_env.return_value = self.env
@@ -299,67 +310,6 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
         sleep.assert_called_once_with(7.0)
 
 
-class TelegramListenerDeliveryFailureTests(unittest.TestCase):
-    @patch("telegram_listener.requests.post")
-    def test_http_or_telegram_error_is_failure(self, post):
-        post.return_value = Mock(status_code=500)
-        self.assertFalse(listener_send_message("fixture-token", "fixture-chat", "test"))
-
-        post.return_value = Mock(status_code=200, json=lambda: {"ok": False})
-        self.assertFalse(listener_send_message("fixture-token", "fixture-chat", "test"))
-
-    @patch("telegram_listener.requests.post")
-    def test_successful_response_is_success(self, post):
-        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
-
-        self.assertTrue(listener_send_message("fixture-token", "fixture-chat", "test"))
-
-    @patch("telegram_listener.requests.post")
-    def test_network_error_redacts_bot_token(self, post):
-        token = "fixture-secret-token"
-        post.side_effect = RuntimeError(f"request failed for bot{token}/sendMessage")
-        output = io.StringIO()
-
-        with redirect_stdout(output):
-            self.assertFalse(listener_send_message(token, "fixture-chat", "test"))
-
-        self.assertNotIn(token, output.getvalue())
-        self.assertIn("[REDACTED]", output.getvalue())
-
-    @patch("telegram_listener.time.sleep")
-    @patch("telegram_listener.requests.post")
-    def test_transient_listener_error_is_retried(self, post, sleep):
-        post.side_effect = [
-            Mock(status_code=502),
-            Mock(status_code=200, json=lambda: {"ok": True}),
-        ]
-
-        self.assertTrue(listener_send_message("fixture-token", "fixture-chat", "test"))
-
-        self.assertEqual(post.call_count, 2)
-        sleep.assert_called_once()
-
-    @patch("telegram_listener.time.sleep")
-    @patch("telegram_listener.requests.post")
-    def test_listener_429_reads_retry_after_from_bot_api_json(self, post, sleep):
-        post.side_effect = [
-            Mock(
-                status_code=429,
-                headers={},
-                json=lambda: {
-                    "ok": False,
-                    "error_code": 429,
-                    "parameters": {"retry_after": 4},
-                },
-            ),
-            Mock(status_code=200, json=lambda: {"ok": True}),
-        ]
-
-        self.assertTrue(listener_send_message("fixture-token", "fixture-chat", "test"))
-
-        sleep.assert_called_once_with(4.0)
-
-
 class TelegramUpdateStateTests(unittest.TestCase):
     def test_successful_digest_command_does_not_send_a_second_message(self):
         update = {
@@ -370,7 +320,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch(
             "telegram_listener._run_digest_for_command",
             return_value=(True, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."),
-        ) as run_digest, patch("telegram_listener.send_message") as send:
+        ) as run_digest, patch("telegram_listener.send_text") as send:
             self.assertTrue(
                 process_update(
                     update,
@@ -399,7 +349,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
                 with patch(
                     "telegram_listener._run_digest_for_command",
                     return_value=(False, response),
-                ), patch("telegram_listener.send_message") as send:
+                ), patch("telegram_listener.send_text") as send:
                     self.assertTrue(
                         process_update(
                             update,
@@ -421,7 +371,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state_file = Path(directory) / "update_state.json"
             processed = set()
-            with patch("telegram_listener.send_message") as send:
+            with patch("telegram_listener.send_text") as send:
                 self.assertTrue(
                     process_update(
                         update,
@@ -456,7 +406,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "telegram_listener.send_message"
+            "telegram_listener.send_text"
         ) as send:
             self.assertTrue(
                 process_update(
@@ -482,7 +432,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "telegram_listener.send_message"
+            "telegram_listener.send_text"
         ) as send:
             with self.assertRaises(TelegramConfigurationError):
                 process_update(
