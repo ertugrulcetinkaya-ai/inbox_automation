@@ -139,6 +139,25 @@ class ArchitectureTests(unittest.TestCase):
                     template["EnvironmentVariables"].get("PYTHONUNBUFFERED"), "1"
                 )
 
+    def test_listener_print_calls_flush_stdout(self):
+        project_root = Path(main.__file__).parent
+        listener_path = project_root / "telegram_listener.py"
+        tree = ast.parse(listener_path.read_text(encoding="utf-8"))
+        print_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+        ]
+
+        self.assertTrue(print_calls)
+        for call in print_calls:
+            with self.subTest(line=call.lineno):
+                flush = next((kw.value for kw in call.keywords if kw.arg == "flush"), None)
+                self.assertIsInstance(flush, ast.Constant)
+                self.assertIs(flush.value, True)
+
     def test_deploy_script_mktemp_calls_use_portable_templates(self):
         project_root = Path(main.__file__).parent
         deploy_script = (project_root / "scripts" / "deploy_mac_mini.sh").read_text(
