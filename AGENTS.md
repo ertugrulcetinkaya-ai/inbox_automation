@@ -12,6 +12,7 @@
 
 - Read only the `ertugrul@cetinkayalar.com` account's primary Inbox.
 - For Gmail, inspect ordinary messages from the last 30 days and retain calendar-payload (`raw_source`) messages for up to 366 days. Apple Mail rollback remains limited to 30 days.
+- Gmail cache retention version is 2. A missing or older/different version with a history checkpoint requires one full sync; the successful staging activation records version 2 atomically with the checkpoint.
 - `MAIL_SOURCE` defaults to `gmail`; use Apple Mail only when `MAIL_SOURCE=apple_mail` is explicitly set.
 - Never mark messages read or unread.
 - Never delete, move, archive, flag, reply, forward, label, or create drafts.

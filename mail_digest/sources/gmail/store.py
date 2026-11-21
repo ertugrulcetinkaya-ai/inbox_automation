@@ -12,6 +12,7 @@ MESSAGE_COLUMNS = (
     "date", "received_local_date", "content", "source_message_id", "raw_source",
     "updated_at_ms",
 )
+RETENTION_VERSION = 2
 
 
 class GmailStore:
@@ -61,6 +62,12 @@ class GmailStore:
     def checkpoint(self):
         row = self.connection.execute(
             "SELECT value FROM metadata WHERE key='history_id'"
+        ).fetchone()
+        return row[0] if row else None
+
+    def retention_version(self):
+        row = self.connection.execute(
+            "SELECT value FROM metadata WHERE key='retention_version'"
         ).fetchone()
         return row[0] if row else None
 
@@ -133,6 +140,11 @@ class GmailStore:
                 "INSERT INTO metadata(key, value) VALUES('updated_at_ms', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (str(int(time.time() * 1000)),),
+            )
+            self.connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('retention_version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(RETENTION_VERSION),),
             )
             self.connection.execute("DELETE FROM staging_messages")
 

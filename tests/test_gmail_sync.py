@@ -145,6 +145,11 @@ class GmailSyncTests(unittest.TestCase):
             NOW_MS - WINDOW_MS,
             NOW_MS - CALENDAR_WINDOW_MS,
         )
+        with self.store.connection:
+            self.store.connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('retention_version', '2') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+            )
 
     def test_full_sync_arrival_after_boundary_is_reconciled(self):
         self.api.messages["new"] = full_message("new")
@@ -317,6 +322,7 @@ class GmailSyncTests(unittest.TestCase):
             self.store.records(), "daily", target_date=self._today()
         )
         self.assertEqual(self.ids(), ["calendar-40d"])
+        self.assertEqual(self.store.retention_version(), "2")
         self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
         self.assertEqual(digest.count, 1)
         self.assertIn("10:00", digest.message)
@@ -417,6 +423,46 @@ class GmailSyncTests(unittest.TestCase):
         self.sync.sync()
         self.assertEqual(self.api.get_calls, [])
         self.assertEqual(self.store.checkpoint(), "91")
+
+    def test_legacy_retention_cache_full_syncs_once_then_uses_incremental(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "DELETE FROM metadata WHERE key='retention_version'"
+            )
+        self.api.listed_by_query = {
+            FULL_SYNC_QUERIES[0]: [],
+            FULL_SYNC_QUERIES[1]: ["calendar-40d"],
+        }
+        self.api.messages["calendar-40d"] = self._forty_day_calendar()
+        self.api.history["100"] = [history_page("101")]
+
+        self.sync.sync()
+
+        self.assertEqual(self.ids(), ["calendar-40d"])
+        self.assertEqual(self.store.retention_version(), "2")
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+
+        self.api.history["101"] = [history_page("102")]
+        self.sync.sync()
+
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+        self.assertEqual(self.api.history_calls[-1], "101")
+        self.assertEqual(self.store.checkpoint(), "102")
+
+    def test_unknown_retention_version_triggers_full_sync(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "UPDATE metadata SET value='1' WHERE key='retention_version'"
+            )
+        self.api.listed_by_query = {query: [] for query in FULL_SYNC_QUERIES}
+        self.api.history["100"] = [history_page("101")]
+
+        self.sync.sync()
+
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+        self.assertEqual(self.store.retention_version(), "2")
 
     def test_exact_cutoff_is_inclusive_and_prunes_older(self):
         self.api.listed = ["edge", "old"]

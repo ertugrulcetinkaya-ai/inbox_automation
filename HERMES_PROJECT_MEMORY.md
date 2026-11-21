@@ -8,7 +8,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - `MAIL_SOURCE=gmail` selects the read-only Gmail API and `MAIL_SOURCE=apple_mail` selects the rollback adapter. There is no automatic fallback between them.
 - `gmail` is the application and launchd-renderer default; Apple Mail is selected only by explicitly setting `MAIL_SOURCE=apple_mail` or passing `--mail-source apple_mail` to the plist renderer.
 - Gmail uses only `https://www.googleapis.com/auth/gmail.readonly`; normal digest execution never starts interactive OAuth. `scripts/gmail_auth.py` is the explicit one-time authorization path.
-- Gmail maintains a normalized SQLite cache under `~/.hermes_local_automation/gmail/` by default. Full sync uses a pre-snapshot history boundary, staging, history reconciliation, and atomic cache/checkpoint activation; later runs use exact Gmail history change arrays and current-message state.
+- Gmail maintains a normalized SQLite cache under `~/.hermes_local_automation/gmail/` by default. Full sync uses a pre-snapshot history boundary, staging, history reconciliation, and atomic cache/checkpoint/`retention_version=2` activation; a missing or mismatched retention version forces one full sync before incremental processing resumes.
 - SCOPE: Only the account configured with `ertugrul@cetinkayalar.com` is included.
 - SCOPE: Only the primary inbox is included. Mailboxes must be named exactly "INBOX" or "Inbox". All other folders are excluded.
 - Gmail retains ordinary messages for 30 days and messages with a calendar payload in `raw_source` for up to 366 days. The Apple Mail rollback adapter remains limited to 30 days; read status does not matter.

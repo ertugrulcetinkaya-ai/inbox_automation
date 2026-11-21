@@ -6,6 +6,7 @@ import time
 
 from .api import GmailHistoryExpired, GmailNotFound
 from .mime import MessageStructureError, normalize_message
+from .store import RETENTION_VERSION
 
 
 WINDOW_MS = 30 * 86400 * 1000
@@ -183,7 +184,7 @@ class GmailSynchronizer:
 
     def sync(self):
         checkpoint = self.store.checkpoint()
-        if checkpoint is None:
+        if checkpoint is None or self.store.retention_version() != str(RETENTION_VERSION):
             self.full_sync()
         else:
             self.incremental_sync(checkpoint)
