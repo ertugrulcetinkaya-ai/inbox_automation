@@ -15,6 +15,7 @@ from mail_digest.sources.gmail.sync import (
     FETCH_BATCH_SIZE,
     FULL_SYNC_QUERIES,
     GmailSynchronizer,
+    RETENTION_UPGRADE_RETRY_INTERVAL_MS,
     WINDOW_MS,
 )
 from parse_cache_test_support import isolate_parse_cache
@@ -84,6 +85,7 @@ def event(array_name, message_id, labels=None):
 class FakeApi:
     def __init__(self):
         self.profiles = [{"historyId": "100"}]
+        self.profile_calls = 0
         self.listed = []
         self.listed_by_query = {}
         self.list_queries = []
@@ -94,6 +96,7 @@ class FakeApi:
         self.history_calls = []
 
     def get_profile(self):
+        self.profile_calls += 1
         value = self.profiles.pop(0) if len(self.profiles) > 1 else self.profiles[0]
         if isinstance(value, Exception):
             raise value
@@ -586,6 +589,78 @@ class GmailSyncTests(unittest.TestCase):
 
         self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
         self.assertEqual(self.store.retention_version(), "2")
+
+    def test_failed_retention_upgrade_continues_incrementally(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "DELETE FROM metadata WHERE key='retention_version'"
+            )
+        self.api.profiles = [GmailApiError("Gmail API request failed (HTTP 403)")]
+        self.api.history["90"] = [history_page("91")]
+
+        with patch("mail_digest.sources.gmail.sync.log") as logger:
+            records = self.sync.sync()
+
+        self.assertEqual([record["source_message_id"] for record in records], ["old"])
+        self.assertEqual(self.store.checkpoint(), "91")
+        self.assertIsNone(self.store.retention_version())
+        self.assertEqual(
+            self.store.retention_upgrade_last_attempt_ms(), NOW_MS
+        )
+        logger.assert_called_once_with(
+            "Retention upgrade full sync failed "
+            "(GmailApiError: Gmail API request failed (HTTP 403)); "
+            "continuing with incremental sync"
+        )
+
+    def test_retention_upgrade_is_skipped_within_six_hours(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "DELETE FROM metadata WHERE key='retention_version'"
+            )
+        self.store.set_retention_upgrade_last_attempt_ms(
+            NOW_MS - RETENTION_UPGRADE_RETRY_INTERVAL_MS + 1
+        )
+        prior_failure = GmailApiError("must not run full sync")
+        self.api.profiles = [prior_failure, {"historyId": "100"}]
+        self.api.history["90"] = [history_page("91")]
+
+        self.sync.sync()
+
+        self.assertEqual(self.api.profile_calls, 0)
+        self.assertEqual(self.api.profiles[0], prior_failure)
+        self.assertEqual(self.api.list_queries, [])
+        self.assertEqual(self.api.history_calls, ["90"])
+        self.assertIsNone(self.store.retention_version())
+
+    def test_retention_upgrade_retries_after_six_hours_and_sets_version(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "UPDATE metadata SET value='1' WHERE key='retention_version'"
+            )
+        self.store.set_retention_upgrade_last_attempt_ms(
+            NOW_MS - RETENTION_UPGRADE_RETRY_INTERVAL_MS
+        )
+        self.api.listed_by_query = {query: [] for query in FULL_SYNC_QUERIES}
+        self.api.history["100"] = [history_page("101")]
+
+        self.sync.sync()
+
+        self.assertEqual(self.api.profile_calls, 1)
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+        self.assertEqual(self.store.retention_version(), "2")
+
+    def test_initial_full_sync_failure_does_not_fall_back_or_mark_upgrade(self):
+        self.api.profiles = [GmailApiError("initial full sync failure")]
+
+        with self.assertRaises(GmailApiError):
+            self.sync.sync()
+
+        self.assertIsNone(self.store.checkpoint())
+        self.assertIsNone(self.store.retention_upgrade_last_attempt_ms())
 
     def test_exact_cutoff_is_inclusive_and_prunes_older(self):
         self.api.listed = ["edge", "old"]
