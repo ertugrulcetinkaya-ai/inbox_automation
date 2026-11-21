@@ -39,6 +39,8 @@
 - CLI and listener entry points best-effort rotate only their own named launchd logs in `PROJECT_ROOT/logs` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
 - Every non-dry-run locked `run_digest()` records per-mode start, success, and failure timestamps in `~/.hermes_local_automation/mail_digest/status.json` (override with `MAIL_DIGEST_STATUS_FILE`); persist only exception class names. Dry-run digests leave status unchanged. `/durum`, `/status`, and `main.py --status` use a local-only health report, and `--status --dry-run` prints it without taking the digest lock.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
+- Increment `mail_digest/parsing.PARSER_VERSION` whenever a change can alter parser output; this invalidates persisted parse-cache entries.
+- The persistent meeting parse cache belongs to `services/`, uses a SHA-256 key over parser version, parser inputs, and date range, and stores JSON with typed date/time values. Keep its file at `0600` and its cache directory at `0700`; `MAIL_DIGEST_PARSE_CACHE_FILE` may override the default location. Cache failures must warn once and fall back to ordinary parsing without failing the digest.
 
 ## Runtime ownership
 

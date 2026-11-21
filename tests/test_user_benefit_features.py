@@ -22,6 +22,9 @@ from mail_digest.services.reminder_state import (
     mark_reminders_sent,
     reminder_key,
 )
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 def ics_record(

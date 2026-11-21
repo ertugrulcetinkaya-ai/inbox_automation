@@ -4,6 +4,9 @@ from datetime import date
 from main import extract_meetings
 from mail_digest.services.meeting_service import format_attention_digest
 from mail_digest.utils import strip_quoted_reply
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 def record(subject, content):

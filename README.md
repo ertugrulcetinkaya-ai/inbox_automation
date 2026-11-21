@@ -21,6 +21,7 @@ Proje yalnızca hedef hesabın birincil gelen kutusunu inceler. Gmail'de normal 
 - Bugün dâhil 7 günlük görünümü günlere göre gruplar; çakışmaları ve 15 dakikadan kısa araları işaretler.
 - Ertelenmiş, kesinleşmemiş veya düşük güvenle metinden çıkarılmış toplantıları ayrı bir `Dikkat gerektirenler` bölümünde gösterir.
 - LLM kullanmadan, deterministik tarih/saat ayrıştırması yapar.
+- Ayrıştırma sonuçlarını yerel SQLite önbelleğinde tekrar kullanır. Önbellek varsayılan olarak `~/.hermes_local_automation/mail_digest/parse_cache.sqlite3` konumunda tutulur; dosya `0600`, dizin `0700` izinleriyle korunur ve `MAIL_DIGEST_PARSE_CACHE_FILE` ile değiştirilebilir. Anahtarlar parser sürümünü, mesaj ayrıştırma girdilerini ve istenen tarih aralığını kapsar. Önbellek kullanılamazsa ayrıştırma normal şekilde sürer.
 
 ## Telegram komutları
 
@@ -58,6 +59,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 - `mail_digest/sources/gmail/`: Gmail OAuth, salt-okunur API, MIME normalizasyonu, SQLite cache ve history senkronizasyon katmanıdır.
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
+- `mail_digest/services/parse_cache.py`: tarih aralığı ve parser sürümüne bağlı SHA-256 anahtarlarla JSON ayrıştırma sonuçlarını SQLite'ta saklar; cache hatası digest'i engellemez.
 - `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları hash kimlikleriyle kaydeder ve son başarılı reminder taramasını cursor olarak tutarak aynı toplantı için tekrar bildirim gönderilmesini önler.
 - `mail_digest/services/run_status.py` and `mail_digest/services/health.py`: mod başına çalışma durumunu kişisel veri içermeden atomik kaydeder ve ağ kullanmadan `/durum`/`--status` raporunu oluşturur. Gmail token JSON'u yenileme yapmadan okunur; SQLite cache salt-okunur açılır.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
@@ -207,5 +209,7 @@ Betik `PYTHON` değişkeniyle farklı bir Python yorumlayıcısı alabilir ve `r
 Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixture'ları ve dış sistem hata akışlarını içerir. `tests/fixtures/` altında kişisel veri içermeyen 20 örnek bulunur; AppleScript timeout/bozuk çıktı, Telegram HTTP veya `ok:false` cevabı, 10.30/09.30/14.30 saatleri, tarih biçimleri, yıl geçişi, hafta günleri, quoted reply, iptal, erteleme ve çoklu tarih senaryoları test edilir.
 
 Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular; `python scripts/bench_parser.py` daily, weekly, upcoming ve reminder parser sürelerini ölçer.
+
+Ayrıştırma çıktısını etkileyen her değişiklikte `mail_digest/parsing/__init__.py` içindeki `PARSER_VERSION` artırılır; böylece eski parse-cache kayıtları kullanılmaz. Cache girdileri her çalışmada, başlangıç aralığı bugünden iki günden daha eski olanlar için temizlenir.
 
 Mail erişimi ve Telegram gönderimi salt-okunur operasyon mantığıyla tasarlanmıştır: mesaj silme, taşıma, işaretleme, cevaplama, yönlendirme veya taslak oluşturma yapılmaz.

@@ -16,6 +16,9 @@ from mail_digest.sources.gmail.sync import (
     GmailSynchronizer,
     WINDOW_MS,
 )
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 NOW_MS = 1_800_000_000_000

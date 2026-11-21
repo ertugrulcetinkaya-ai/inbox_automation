@@ -6,6 +6,9 @@ from mail_digest.services.meeting_service import (
     build_digest_result,
     due_reminder_meetings,
 )
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 def event(
