@@ -67,6 +67,24 @@ class GmailApiTests(unittest.TestCase):
             userId="me", labelIds=["INBOX"], q=query, maxResults=500
         )
 
+    def test_history_requests_only_message_and_label_changes_without_label_filter(self):
+        request = Mock()
+        request.execute.return_value = {"historyId": "91"}
+        history_resource = Mock()
+        history_resource.list.return_value = request
+        users = Mock()
+        users.history.return_value = history_resource
+        service = Mock()
+        service.users.return_value = users
+
+        list(GmailApi(service).iter_history("90"))
+
+        history_resource.list.assert_called_once_with(
+            userId="me",
+            startHistoryId="90",
+            historyTypes=["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

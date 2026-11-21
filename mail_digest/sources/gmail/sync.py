@@ -19,28 +19,32 @@ class GmailSyncError(RuntimeError):
     pass
 
 
-def _affected_ids(history_pages):
-    affected = set()
+def _affected_ids(history_pages, store):
+    affected = {}
     final_history_id = None
     for page in history_pages:
         if page.get("historyId"):
             final_history_id = str(page["historyId"])
         for history in page.get("history", []) or []:
             for entry in history.get("messagesAdded", []) or []:
-                message_id = (entry.get("message") or {}).get("id")
-                if message_id:
-                    affected.add(message_id)
+                message = entry.get("message") or {}
+                message_id = message.get("id")
+                if message_id and (
+                    "INBOX" in (message.get("labelIds") or [])
+                    or store.has_message(message_id)
+                ):
+                    affected[message_id] = "fetch"
             for entry in history.get("messagesDeleted", []) or []:
                 message_id = (entry.get("message") or {}).get("id")
                 if message_id:
-                    affected.add(message_id)
+                    affected[message_id] = "delete"
             for array_name in ("labelsAdded", "labelsRemoved"):
                 for entry in history.get(array_name, []) or []:
                     if "INBOX" not in (entry.get("labelIds") or []):
                         continue
                     message_id = (entry.get("message") or {}).get("id")
                     if message_id:
-                        affected.add(message_id)
+                        affected[message_id] = "fetch"
     if final_history_id is None:
         raise GmailSyncError("History response did not contain a checkpoint")
     return affected, final_history_id
@@ -128,11 +132,17 @@ class GmailSynchronizer:
                 if snapshot_batch:
                     self.store.stage_many(snapshot_batch)
                 affected, new_history_id = _affected_ids(
-                    self.api.iter_history(str(start_history_id))
+                    self.api.iter_history(str(start_history_id)), self.store
                 )
                 affected_batch = []
                 deleted_batch = []
-                for message_id in sorted(affected):
+                for message_id, change_type in sorted(affected.items()):
+                    if change_type == "delete":
+                        deleted_batch.append(message_id)
+                        if len(deleted_batch) >= self.stage_batch_size:
+                            self.store.stage_delete_many(deleted_batch)
+                            deleted_batch = []
+                        continue
                     operation, payload = self._current_operation(
                         message_id, cutoff_ms, calendar_cutoff_ms
                     )
@@ -169,15 +179,19 @@ class GmailSynchronizer:
         calendar_cutoff_ms = now_ms - CALENDAR_WINDOW_MS
         try:
             affected, new_history_id = _affected_ids(
-                self.api.iter_history(str(checkpoint))
+                self.api.iter_history(str(checkpoint)), self.store
             )
         except GmailHistoryExpired:
             self.full_sync()
             return
-        operations = [
-            self._current_operation(message_id, cutoff_ms, calendar_cutoff_ms)
-            for message_id in sorted(affected)
-        ]
+        operations = []
+        for message_id, change_type in sorted(affected.items()):
+            if change_type == "delete":
+                operations.append(("delete", message_id))
+            else:
+                operations.append(
+                    self._current_operation(message_id, cutoff_ms, calendar_cutoff_ms)
+                )
         self.store.apply_incremental(
             operations, new_history_id, cutoff_ms, calendar_cutoff_ms
         )

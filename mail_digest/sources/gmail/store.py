@@ -71,6 +71,12 @@ class GmailStore:
         ).fetchone()
         return row[0] if row else None
 
+    def has_message(self, message_id):
+        row = self.connection.execute(
+            "SELECT 1 FROM messages WHERE gmail_message_id=?", (message_id,)
+        ).fetchone()
+        return row is not None
+
     def clear_staging(self):
         with self.connection:
             self.connection.execute("DELETE FROM staging_messages")

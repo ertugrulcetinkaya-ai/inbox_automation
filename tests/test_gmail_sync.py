@@ -73,7 +73,9 @@ def history_page(history_id, records=None, next_token=None):
 
 def event(array_name, message_id, labels=None):
     value = {"message": {"id": message_id}}
-    if labels is not None:
+    if array_name == "messagesAdded":
+        value["message"]["labelIds"] = labels if labels is not None else ["INBOX"]
+    elif labels is not None:
         value["labelIds"] = labels
     return {array_name: [value]}
 
@@ -289,6 +291,78 @@ class GmailSyncTests(unittest.TestCase):
         self.api.history["90"] = [history_page("95", changes)]
         self.sync.incremental_sync("90")
         self.assertEqual(self.ids(), [])
+
+    def test_sent_message_added_is_skipped_without_get(self):
+        self.api.history["90"] = [
+            history_page("91", [event("messagesAdded", "sent", ["SENT"])])
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.api.get_calls, [])
+        self.assertEqual(self.ids(), [])
+        self.assertEqual(self.store.checkpoint(), "91")
+
+    def test_deleted_message_is_removed_without_get_in_incremental_sync(self):
+        self.seed_old()
+        self.api.history["90"] = [
+            history_page("91", [event("messagesDeleted", "old")])
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.api.get_calls, [])
+        self.assertEqual(self.ids(), [])
+
+    def test_full_sync_reconciliation_deletes_without_get(self):
+        self.seed_old()
+        self.api.history["100"] = [
+            history_page("101", [event("messagesDeleted", "old")])
+        ]
+
+        self.sync.full_sync()
+
+        self.assertEqual(self.api.get_calls, [])
+        self.assertEqual(self.ids(), [])
+
+    def test_full_sync_reconciliation_skips_sent_message_added_without_get(self):
+        self.api.history["100"] = [
+            history_page("101", [event("messagesAdded", "sent", ["SENT"])])
+        ]
+
+        self.sync.full_sync()
+
+        self.assertEqual(self.api.get_calls, [])
+        self.assertEqual(self.ids(), [])
+
+    def test_cached_message_added_without_inbox_label_is_still_reconciled(self):
+        self.seed_old()
+        self.api.messages["old"] = full_message("old")
+        self.api.history["90"] = [
+            history_page("91", [event("messagesAdded", "old", ["SENT"])])
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.ids(), ["old"])
+        self.assertEqual(self.api.get_calls, [("old", "full")])
+
+    def test_last_history_operation_wins_for_readded_message(self):
+        self.api.messages["readded"] = full_message("readded")
+        self.api.history["90"] = [
+            history_page(
+                "91",
+                [
+                    event("messagesDeleted", "readded"),
+                    event("messagesAdded", "readded", ["INBOX"]),
+                ],
+            )
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.ids(), ["readded"])
+        self.assertEqual(self.api.get_calls, [("readded", "full")])
 
     def _today(self):
         return datetime.fromtimestamp(

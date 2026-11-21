@@ -107,7 +107,16 @@ class GmailApi:
     def iter_history(self, start_history_id):
         page_token = None
         while True:
-            kwargs = {"userId": "me", "startHistoryId": start_history_id}
+            kwargs = {
+                "userId": "me",
+                "startHistoryId": start_history_id,
+                "historyTypes": [
+                    "messageAdded",
+                    "messageDeleted",
+                    "labelAdded",
+                    "labelRemoved",
+                ],
+            }
             if page_token:
                 kwargs["pageToken"] = page_token
             page = self._execute(
