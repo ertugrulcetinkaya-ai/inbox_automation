@@ -5,6 +5,9 @@ import unittest
 
 from mail_digest.config import local_now
 from mail_digest.services.meeting_service import build_digest_result
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 class ParserPerformanceTests(unittest.TestCase):

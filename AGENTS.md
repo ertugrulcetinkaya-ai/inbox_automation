@@ -13,6 +13,8 @@
 - Read only the `ertugrul@cetinkayalar.com` account's primary Inbox.
 - For Gmail, inspect ordinary messages from the last 30 days and retain calendar-payload (`raw_source`) messages for up to 366 days. Apple Mail rollback remains limited to 30 days.
 - Gmail cache retention version is 2. A missing or older/different version with a history checkpoint requires one full sync; the successful staging activation records version 2 atomically with the checkpoint.
+- Gmail history requests use only `messageAdded`, `messageDeleted`, `labelAdded`, and `labelRemoved` event types without a label filter. Skip uncached additions that are not in INBOX, apply message deletions directly to the local cache without fetching them, and preserve the final operation when history contains repeated changes to one ID.
+- Gmail full sync fetches snapshot messages in groups of 50. Per-message 404 results are treated as missing messages; transient 429, 5xx, and rate-limit responses are retried individually through the normal bounded backoff path.
 - `MAIL_SOURCE` defaults to `gmail`; use Apple Mail only when `MAIL_SOURCE=apple_mail` is explicitly set.
 - Never mark messages read or unread.
 - Never delete, move, archive, flag, reply, forward, label, or create drafts.
@@ -39,6 +41,8 @@
 - CLI and listener entry points best-effort rotate only their own named launchd logs in `PROJECT_ROOT/logs` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
 - Every non-dry-run locked `run_digest()` records per-mode start, success, and failure timestamps in `~/.hermes_local_automation/mail_digest/status.json` (override with `MAIL_DIGEST_STATUS_FILE`); persist only exception class names. Dry-run digests leave status unchanged. `/durum`, `/status`, and `main.py --status` use a local-only health report, and `--status --dry-run` prints it without taking the digest lock.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
+- Increment `mail_digest/parsing.PARSER_VERSION` whenever a change can alter parser output; this invalidates persisted parse-cache entries.
+- The persistent meeting parse cache belongs to `services/`, uses a SHA-256 key over parser version, parser inputs, and date range, and stores JSON with typed date/time values. Keep its file at `0600` and its cache directory at `0700`; `MAIL_DIGEST_PARSE_CACHE_FILE` may override the default location. Cache failures must warn once and fall back to ordinary parsing without failing the digest.
 
 ## Runtime ownership
 
@@ -48,6 +52,7 @@
 - When Hermes owns the Telegram bot, do not start the standalone listener; there must be only one Telegram polling/dispatch owner.
 - Keep existing launchd labels stable unless a migration plan explicitly covers unload, disable, install, and verification.
 - Every digest entry point must call the shared `mail_digest.cli.run_digest()` service. It owns the `/tmp/mail_unread_digest.lock` `fcntl.flock()` lock, so launchd and Telegram commands cannot run overlapping digests; never reintroduce `exists()`/`touch()` lock checks or unlink the lock file.
+- `digest_lock()` and `run_digest()` default to immediate lock contention handling (`wait_seconds=0`) for launchd and CLI work. The standalone Telegram listener may pass `wait_seconds=30`; lock retries use 0.5-second non-blocking intervals, and the lock file is never removed.
 - Deploy the integrated runtime through `company_reporting_hub/scripts/deploy_mac_mini.sh` after both repositories are pushed.
 
 ## Change and verification rules
@@ -55,6 +60,7 @@
 - Prefer small, explicit patches and keep unrelated working-tree changes untouched.
 - Dotted numeric date/time context checks must scan only the token's nearby window so parser cost does not grow with the full message length per token; preserve parser results and keep the 100-message synthetic performance regression test.
 - Run `./scripts/check.sh` locally for compile, unit, lint, type, and whitespace checks; set `PYTHON` to override its interpreter. It runs Bandit only when installed and explains how to activate the venv when Ruff or Pyright is missing. Run `./scripts/check.sh --audit` only for an explicitly requested dependency audit. GitHub Actions is manually triggered with `workflow_dispatch`.
+- `python scripts/bench_parser.py --cache` compares uncached, cold-cache, and warm-cache timings on synthetic records using a temporary parse-cache database.
 - Digest logs may include message counts and source names, but must omit the mailbox address and message content.
 - Add or update tests for parser, command, routing, or deployment changes.
 - Keep parser coverage broad: maintain table-driven date/time/weekday/lifecycle cases, sanitized fixtures under `tests/fixtures/`, duplicate/update regressions, and Mail/Telegram failure-path tests. Fixtures must not contain real personal data or credentials.

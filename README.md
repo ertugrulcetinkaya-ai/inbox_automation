@@ -21,6 +21,7 @@ Proje yalnızca hedef hesabın birincil gelen kutusunu inceler. Gmail'de normal 
 - Bugün dâhil 7 günlük görünümü günlere göre gruplar; çakışmaları ve 15 dakikadan kısa araları işaretler.
 - Ertelenmiş, kesinleşmemiş veya düşük güvenle metinden çıkarılmış toplantıları ayrı bir `Dikkat gerektirenler` bölümünde gösterir.
 - LLM kullanmadan, deterministik tarih/saat ayrıştırması yapar.
+- Ayrıştırma sonuçlarını yerel SQLite önbelleğinde tekrar kullanır. Önbellek varsayılan olarak `~/.hermes_local_automation/mail_digest/parse_cache.sqlite3` konumunda tutulur; dosya `0600`, dizin `0700` izinleriyle korunur ve `MAIL_DIGEST_PARSE_CACHE_FILE` ile değiştirilebilir. Anahtarlar parser sürümünü, mesaj ayrıştırma girdilerini ve istenen tarih aralığını kapsar. Önbellek kullanılamazsa ayrıştırma normal şekilde sürer.
 
 ## Telegram komutları
 
@@ -58,6 +59,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 - `mail_digest/sources/gmail/`: Gmail OAuth, salt-okunur API, MIME normalizasyonu, SQLite cache ve history senkronizasyon katmanıdır.
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
+- `mail_digest/services/parse_cache.py`: tarih aralığı ve parser sürümüne bağlı SHA-256 anahtarlarla JSON ayrıştırma sonuçlarını SQLite'ta saklar; cache hatası digest'i engellemez.
 - `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları hash kimlikleriyle kaydeder ve son başarılı reminder taramasını cursor olarak tutarak aynı toplantı için tekrar bildirim gönderilmesini önler.
 - `mail_digest/services/run_status.py` and `mail_digest/services/health.py`: mod başına çalışma durumunu kişisel veri içermeden atomik kaydeder ve ağ kullanmadan `/durum`/`--status` raporunu oluşturur. Gmail token JSON'u yenileme yapmadan okunur; SQLite cache salt-okunur açılır.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
@@ -154,7 +156,7 @@ Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth
 
 Varsayılan yollar `~/.hermes_local_automation/gmail/token.json` ve `~/.hermes_local_automation/gmail/cache.sqlite3`'tür. Sırasıyla `GMAIL_CREDENTIALS_FILE`, `GMAIL_TOKEN_FILE` ve `GMAIL_CACHE_FILE` ile değiştirilebilir. Bu credential, token ve cache dosyalarını repoya koymayın.
 
-İlk Gmail çalışması, `getProfile` history sınırını snapshot'tan önce alır; 31 günlük normal mesaj ve 367 günlük ICS sunucu sorgularını retention sınırlarıyla daraltır, staging snapshot oluşturur ve cache/checkpoint/`retention_version=2` değerini aynı SQLite transaction'ında etkinleştirir. Checkpoint'i olan eski veya retention sürümü eksik cache bir kez tam sync edilir; sonraki çalışmalar yalnızca checkpoint sonrasındaki `messagesAdded`, `messagesDeleted`, `labelsAdded` ve `labelsRemoved` değişikliklerini uzlaştırır. Eski history checkpoint'i HTTP 404 verirse güvenli tam sync yeniden başlar. Mesaj içeriği bozuksa yapısal kimlik/INBOX/tarih bilgisi geçerli olduğu sürece boş içerikli degraded kayıt saklanır.
+İlk Gmail çalışması, `getProfile` history sınırını snapshot'tan önce alır; 31 günlük normal mesaj ve 367 günlük ICS sunucu sorgularını retention sınırlarıyla daraltır, staging snapshot oluşturur ve cache/checkpoint/`retention_version=2` değerini aynı SQLite transaction'ında etkinleştirir. Full sync snapshot mesajlarını 50'lik Gmail batch istekleriyle alır; tekil 404'ler silinmiş mesaj sayılır, geçici 429/5xx/rate-limit cevapları sınırlı backoff ile tekil istek olarak yeniden denenir. Checkpoint'i olan eski veya retention sürümü eksik cache bir kez tam sync edilir; sonraki çalışmalar yalnızca `messageAdded`, `messageDeleted`, `labelAdded` ve `labelRemoved` türündeki history değişikliklerini uzlaştırır; API çağrısında label filtresi kullanılmaz. Inbox dışındaki yeni ve cache'te bulunmayan mesajlar getirilmez, silinmiş mesajlar yerel cache'ten Gmail `get` çağrısı yapılmadan çıkarılır. Eski history checkpoint'i HTTP 404 verirse güvenli tam sync yeniden başlar. Mesaj içeriği bozuksa yapısal kimlik/INBOX/tarih bilgisi geçerli olduğu sürece boş içerikli degraded kayıt saklanır.
 
 Production transport Gmail'dir: `MAIL_SOURCE=gmail` kullanın. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest başarısız olur. launchd dosyalarını Gmail ayarlarıyla preview olarak üretmek için:
 
@@ -186,7 +188,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Mac Studio ve MacBook Pro geliştirme içindir.
 - Mac Mini tek runtime/production makinesidir.
 - Company Reporting/Hermes aynı Telegram botunu yönetirken bağımsız `telegram_listener.py` çalıştırılmaz; ikinci Telegram polling süreci oluşturulmaz.
-- 08:00 launchd çalışması ile Telegram komutu aynı `run_digest()` akışını kullanır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Dosyanın diskte kalması stale-lock oluşturmaz.
+- 08:00 launchd çalışması ile Telegram komutu aynı `run_digest()` akışını kullanır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. CLI/launchd varsayılan olarak hemen döner; bağımsız Telegram listener aynı kilidi 30 saniyeye kadar 0,5 saniyelik aralıklarla bekler. Dosyanın diskte kalması stale-lock oluşturmaz.
 - CLI ve listener başlangıcında yalnızca o sürecin launchd logları döndürülür; iki süreç diğerinin loglarına dokunmaz ve dosya sistemi hataları digest akışını durdurmaz. Listener launchd işi `ThrottleInterval=30` ile çökme döngülerini sınırlar.
 - Beş dakikalık hatırlatma görevi de aynı `run_digest()` ve `flock` akışını kullanır; günlük özet veya Telegram komutuyla çakışırsa güvenli biçimde o turu atlar.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
@@ -206,6 +208,8 @@ Betik `PYTHON` değişkeniyle farklı bir Python yorumlayıcısı alabilir ve `r
 
 Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixture'ları ve dış sistem hata akışlarını içerir. `tests/fixtures/` altında kişisel veri içermeyen 20 örnek bulunur; AppleScript timeout/bozuk çıktı, Telegram HTTP veya `ok:false` cevabı, 10.30/09.30/14.30 saatleri, tarih biçimleri, yıl geçişi, hafta günleri, quoted reply, iptal, erteleme ve çoklu tarih senaryoları test edilir.
 
-Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular; `python scripts/bench_parser.py` daily, weekly, upcoming ve reminder parser sürelerini ölçer.
+Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular. `python scripts/bench_parser.py --cache` daily, weekly, upcoming ve reminder sürelerini önbelleksiz, soğuk ve sıcak önbellek koşullarında ölçer; yalnızca geçici cache dosyaları kullanır.
+
+Ayrıştırma çıktısını etkileyen her değişiklikte `mail_digest/parsing/__init__.py` içindeki `PARSER_VERSION` artırılır; böylece eski parse-cache kayıtları kullanılmaz. Cache girdileri her çalışmada, başlangıç aralığı bugünden iki günden daha eski olanlar için temizlenir.
 
 Mail erişimi ve Telegram gönderimi salt-okunur operasyon mantığıyla tasarlanmıştır: mesaj silme, taşıma, işaretleme, cevaplama, yönlendirme veya taslak oluşturma yapılmaz.

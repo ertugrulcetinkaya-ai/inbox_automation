@@ -2,6 +2,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +16,49 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DigestLockTests(unittest.TestCase):
+    def test_zero_wait_keeps_immediate_contention_behavior(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "digest.lock"
+            with digest_lock(lock_path):
+                started = time.monotonic()
+                with self.assertRaises(DigestAlreadyRunning):
+                    with digest_lock(lock_path, wait_seconds=0):
+                        self.fail("busy lock was acquired")
+                self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_waiting_caller_acquires_lock_after_it_is_released(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "digest.lock"
+            acquired = threading.Event()
+            errors = []
+
+            def waiting_caller():
+                try:
+                    with digest_lock(lock_path, wait_seconds=2):
+                        acquired.set()
+                except Exception as exc:  # pragma: no cover - asserted below
+                    errors.append(exc)
+
+            with digest_lock(lock_path):
+                thread = threading.Thread(target=waiting_caller)
+                thread.start()
+                time.sleep(0.6)
+
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(acquired.is_set())
+            self.assertEqual(errors, [])
+
+    def test_waiting_caller_times_out(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "digest.lock"
+            with digest_lock(lock_path):
+                started = time.monotonic()
+                with self.assertRaises(DigestAlreadyRunning):
+                    with digest_lock(lock_path, wait_seconds=0.55):
+                        self.fail("busy lock was acquired")
+                self.assertGreaterEqual(time.monotonic() - started, 0.5)
+
     def test_leftover_lock_file_does_not_block_a_new_run(self):
         with tempfile.TemporaryDirectory() as directory:
             lock_path = Path(directory) / "digest.lock"
@@ -75,6 +120,17 @@ except DigestAlreadyRunning:
 
         run.assert_called_once_with(upcoming=True, dry_run=False)
 
+    @patch("mail_digest.cli.digest_lock")
+    @patch("mail_digest.cli._run_digest", return_value=0)
+    def test_cli_passes_explicit_lock_wait_to_shared_lock(self, run, lock):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"MAIL_DIGEST_STATUS_FILE": str(Path(directory) / "status.json")},
+        ):
+            run_digest(wait_seconds=1.5)
+
+        lock.assert_called_once_with(wait_seconds=1.5)
+
     @patch("mail_digest.cli.run_digest", side_effect=DigestAlreadyRunning)
     def test_cli_contention_is_a_successful_noop_for_launchd(self, run):
         with patch.object(sys, "argv", ["main.py"]):
@@ -106,14 +162,14 @@ class TelegramListenerLockIntegrationTests(unittest.TestCase):
             listener_run_digest(),
             "Bugünün toplantı özeti Telegram sohbetinize gönderildi.",
         )
-        execute.assert_called_once_with(upcoming=False)
+        execute.assert_called_once_with(upcoming=False, wait_seconds=30)
 
     @patch("telegram_listener.execute_digest", side_effect=DigestAlreadyRunning)
     def test_listener_reports_contention(self, execute):
         from telegram_listener import run_digest as listener_run_digest
 
         self.assertIn("hazırlanıyor", listener_run_digest())
-        execute.assert_called_once_with(upcoming=False)
+        execute.assert_called_once_with(upcoming=False, wait_seconds=30)
 
     @patch("telegram_listener.execute_digest", return_value=0)
     def test_listener_routes_weekly_and_attention_modes_through_shared_service(self, execute):
@@ -123,21 +179,21 @@ class TelegramListenerLockIntegrationTests(unittest.TestCase):
             listener_run_digest(mode="weekly"),
             "Haftalık toplantı özeti Telegram sohbetinize gönderildi.",
         )
-        execute.assert_called_once_with(mode="weekly")
+        execute.assert_called_once_with(mode="weekly", wait_seconds=30)
 
         execute.reset_mock()
         self.assertEqual(
             listener_run_digest(mode="attention"),
             "Dikkat gerektiren toplantılar Telegram sohbetinize gönderildi.",
         )
-        execute.assert_called_once_with(mode="attention")
+        execute.assert_called_once_with(mode="attention", wait_seconds=30)
 
         execute.reset_mock()
         self.assertEqual(
             listener_run_digest(upcoming=True),
             "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi.",
         )
-        execute.assert_called_once_with(upcoming=True)
+        execute.assert_called_once_with(upcoming=True, wait_seconds=30)
 
 
 if __name__ == "__main__":

@@ -9,10 +9,11 @@ from email.utils import parseaddr
 from typing import cast
 from zoneinfo import ZoneInfo
 
-from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now
+from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now, log
 from ..models import MeetingOccurrence
 from ..parsing.ics import recurrence_identity
 from ..parsing.meeting_parser import extract_meetings
+from .parse_cache import ParseCache, ParseCacheUnavailable, cache_key
 from ..utils import record_source_received_at
 
 
@@ -46,9 +47,10 @@ def _status_label(status):
 
 
 def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurrence]:
-    meetings = []
-    for record in records:
-        meetings.extend(
+    records = list(records)
+
+    def parse_uncached():
+        return [
             extract_meetings(
                 record,
                 start_date,
@@ -56,7 +58,38 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
                 include_cancelled=True,
                 include_lifecycle_outside_range=True,
             )
-        )
+            for record in records
+        ]
+
+    try:
+        parsed_records = []
+        pending = {}
+        with ParseCache() as cache:
+            for record in records:
+                key = cache_key(
+                    record,
+                    start_date,
+                    end_date,
+                    include_cancelled=True,
+                    include_lifecycle_outside_range=True,
+                )
+                result = cache.get(key)
+                if result is None:
+                    result = extract_meetings(
+                        record,
+                        start_date,
+                        end_date,
+                        include_cancelled=True,
+                        include_lifecycle_outside_range=True,
+                    )
+                    pending[key] = result
+                parsed_records.append(result)
+            cache.store(start_date, pending)
+    except ParseCacheUnavailable:
+        log("Meeting parse cache unavailable; parsing without cache")
+        parsed_records = parse_uncached()
+
+    meetings = [meeting for parsed in parsed_records for meeting in parsed]
 
     status_priority = {
         "CONFIRMED": 0,

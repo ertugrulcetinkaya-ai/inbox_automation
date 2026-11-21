@@ -8,6 +8,9 @@ from main import (
     parse_ics_meetings,
     parse_received_date,
 )
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 class MeetingDateContextTests(unittest.TestCase):

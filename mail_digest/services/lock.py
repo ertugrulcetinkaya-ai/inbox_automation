@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -14,8 +15,8 @@ class DigestAlreadyRunning(RuntimeError):
 
 
 @contextmanager
-def digest_lock(lock_path: Path | None = None):
-    """Hold an exclusive, non-blocking OS lock for one digest run.
+def digest_lock(lock_path: Path | None = None, wait_seconds=0):
+    """Hold an exclusive OS lock, optionally waiting in half-second intervals.
 
     The file itself is only a stable rendezvous point. It is deliberately not
     removed on exit: ``flock`` releases the kernel lock when the descriptor is
@@ -26,15 +27,24 @@ def digest_lock(lock_path: Path | None = None):
     path = Path(lock_path or DIGEST_LOCK_FILE).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+")
+    locked = False
     try:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise DigestAlreadyRunning from exc
+        deadline = time.monotonic() + max(0.0, float(wait_seconds))
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise DigestAlreadyRunning from exc
+                time.sleep(min(0.5, remaining))
 
         yield
     finally:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            if locked:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()

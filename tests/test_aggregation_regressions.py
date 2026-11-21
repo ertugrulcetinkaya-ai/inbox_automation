@@ -2,6 +2,9 @@ import unittest
 from datetime import date, datetime
 
 from main import format_digest, format_upcoming_digest, parse_ics_meetings
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 def ics_record(uid="same-meeting@example.com", sequence=0, start="20260815T100000", status="CONFIRMED"):

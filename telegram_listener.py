@@ -145,9 +145,9 @@ def run_prepare_report_session():
 def _run_digest_for_command(upcoming=False, mode=None) -> tuple[bool, str]:
     try:
         if mode is None:
-            exit_code = execute_digest(upcoming=upcoming)
+            exit_code = execute_digest(upcoming=upcoming, wait_seconds=30)
         else:
-            exit_code = execute_digest(mode=mode)
+            exit_code = execute_digest(mode=mode, wait_seconds=30)
     except DigestAlreadyRunning:
         return False, "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin."
     except Exception as exc:

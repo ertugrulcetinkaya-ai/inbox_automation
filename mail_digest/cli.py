@@ -131,10 +131,10 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
     return 0
 
 
-def run_digest(upcoming=False, dry_run=False, mode=None):
+def run_digest(upcoming=False, dry_run=False, mode=None, wait_seconds=0):
     """Run one digest while holding the shared process-level lock."""
 
-    with digest_lock():
+    with digest_lock(wait_seconds=wait_seconds):
         selected_mode = mode or ("upcoming" if upcoming else "daily")
         if not dry_run:
             record_run_started(selected_mode)
