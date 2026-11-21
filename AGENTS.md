@@ -52,6 +52,7 @@
 - When Hermes owns the Telegram bot, do not start the standalone listener; there must be only one Telegram polling/dispatch owner.
 - Keep existing launchd labels stable unless a migration plan explicitly covers unload, disable, install, and verification.
 - Every digest entry point must call the shared `mail_digest.cli.run_digest()` service. It owns the `/tmp/mail_unread_digest.lock` `fcntl.flock()` lock, so launchd and Telegram commands cannot run overlapping digests; never reintroduce `exists()`/`touch()` lock checks or unlink the lock file.
+- `digest_lock()` and `run_digest()` default to immediate lock contention handling (`wait_seconds=0`) for launchd and CLI work. The standalone Telegram listener may pass `wait_seconds=30`; lock retries use 0.5-second non-blocking intervals, and the lock file is never removed.
 - Deploy the integrated runtime through `company_reporting_hub/scripts/deploy_mac_mini.sh` after both repositories are pushed.
 
 ## Change and verification rules

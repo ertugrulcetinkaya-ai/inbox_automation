@@ -188,7 +188,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Mac Studio ve MacBook Pro geliştirme içindir.
 - Mac Mini tek runtime/production makinesidir.
 - Company Reporting/Hermes aynı Telegram botunu yönetirken bağımsız `telegram_listener.py` çalıştırılmaz; ikinci Telegram polling süreci oluşturulmaz.
-- 08:00 launchd çalışması ile Telegram komutu aynı `run_digest()` akışını kullanır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Dosyanın diskte kalması stale-lock oluşturmaz.
+- 08:00 launchd çalışması ile Telegram komutu aynı `run_digest()` akışını kullanır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. CLI/launchd varsayılan olarak hemen döner; bağımsız Telegram listener aynı kilidi 30 saniyeye kadar 0,5 saniyelik aralıklarla bekler. Dosyanın diskte kalması stale-lock oluşturmaz.
 - CLI ve listener başlangıcında yalnızca o sürecin launchd logları döndürülür; iki süreç diğerinin loglarına dokunmaz ve dosya sistemi hataları digest akışını durdurmaz. Listener launchd işi `ThrottleInterval=30` ile çökme döngülerini sınırlar.
 - Beş dakikalık hatırlatma görevi de aynı `run_digest()` ve `flock` akışını kullanır; günlük özet veya Telegram komutuyla çakışırsa güvenli biçimde o turu atlar.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
