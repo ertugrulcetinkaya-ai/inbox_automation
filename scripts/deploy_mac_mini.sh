@@ -112,11 +112,31 @@ PLISTS=(
 )
 
 if [[ "$APPLY" == true ]]; then
-    for label in "${LABELS[@]}"; do
+    report_launchd_failure() {
+        local failed_label="$1"
+        local loaded_labels=()
+        local label
+        for label in "${LABELS[@]}"; do
+            if launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then
+                loaded_labels+=("$label")
+            fi
+        done
+        local loaded_text='yok'
+        if [[ ${#loaded_labels[@]} -gt 0 ]]; then
+            loaded_text="${loaded_labels[*]}"
+        fi
+        printf 'Yüklü launchd label’ları: %s\n' "$loaded_text" >&2
+        printf 'Başarısız label: %s\n' "$failed_label" >&2
+    }
+
+    for index in "${!LABELS[@]}"; do
+        label="${LABELS[$index]}"
+        plist="${PLISTS[$index]}"
         launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
-    done
-    for plist in "${PLISTS[@]}"; do
-        launchctl bootstrap "$DOMAIN" "$plist"
+        if ! launchctl bootstrap "$DOMAIN" "$plist"; then
+            report_launchd_failure "$label"
+            exit 1
+        fi
     done
 else
     for label in "${LABELS[@]}"; do

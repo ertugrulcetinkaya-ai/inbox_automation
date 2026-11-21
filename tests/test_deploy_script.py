@@ -21,6 +21,7 @@ class DeployScriptTests(unittest.TestCase):
         launchd_output="",
         apply=False,
         preflight_ok=True,
+        fail_bootstrap_number=0,
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -59,7 +60,17 @@ class DeployScriptTests(unittest.TestCase):
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
             "if [[ \"${1:-}\" == list ]]; then printf '%s\\n' \"$DEPLOY_TEST_LAUNCHD\"; exit 0; fi\n"
-            "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_LAUNCHCTL_LOG\"\n",
+            "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_LAUNCHCTL_LOG\"\n"
+            "if [[ \"${1:-}\" == bootstrap ]]; then\n"
+            "  count=0\n"
+            "  if [[ -f \"${DEPLOY_TEST_LAUNCHCTL_LOG}.bootstrap_count\" ]]; then read -r count < \"${DEPLOY_TEST_LAUNCHCTL_LOG}.bootstrap_count\"; fi\n"
+            "  count=$((count + 1))\n"
+            "  printf '%s\\n' \"$count\" > \"${DEPLOY_TEST_LAUNCHCTL_LOG}.bootstrap_count\"\n"
+            "  if [[ \"$count\" == \"$DEPLOY_TEST_FAIL_BOOTSTRAP_NUMBER\" ]]; then exit 1; fi\n"
+            "fi\n"
+            "if [[ \"${1:-}\" == print ]]; then\n"
+            "  case \"$2\" in *com.ertugrul.mail.unread.summary|*com.ertugrul.mail.unread.listener) exit 0 ;; *) exit 1 ;; esac\n"
+            "fi\n",
             encoding="utf-8",
         )
         for name in ("python",):
@@ -94,6 +105,7 @@ class DeployScriptTests(unittest.TestCase):
                 "DEPLOY_TEST_DIRTY": "true" if dirty else "false",
                 "DEPLOY_TEST_LAUNCHD": launchd_output,
                 "DEPLOY_TEST_PREFLIGHT_FAIL": "false" if preflight_ok else "true",
+                "DEPLOY_TEST_FAIL_BOOTSTRAP_NUMBER": str(fail_bootstrap_number),
                 "DEPLOY_TEST_GIT_LOG": str(git_log),
                 "DEPLOY_TEST_LAUNCHCTL_LOG": str(launchctl_log),
                 "DEPLOY_TEST_PYTHON_LOG": str(python_log),
@@ -151,6 +163,18 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("main.py --upcoming --dry-run", calls)
         self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))
         self.assertFalse(launchctl_log.exists())
+
+    def test_apply_stops_on_second_bootstrap_and_reports_loaded_labels(self):
+        result, launchctl_log, _ = self.run_deploy(apply=True, fail_bootstrap_number=2)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Başarısız label: com.ertugrul.mail.meeting.reminder", result.stderr)
+        self.assertIn("com.ertugrul.mail.unread.summary", result.stderr)
+        self.assertIn("com.ertugrul.mail.unread.listener", result.stderr)
+        commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+        bootstrap_commands = [command for command in commands if command.startswith("bootstrap ")]
+        self.assertEqual(len(bootstrap_commands), 2)
+        self.assertFalse(any("listener.plist" in command for command in bootstrap_commands))
 
 
 if __name__ == "__main__":
