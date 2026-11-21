@@ -216,7 +216,11 @@ Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth
    .venv/bin/python scripts/gmail_auth.py
    ```
 
-   Normal `main.py` çalışması hiçbir zaman tarayıcı açmaz. Token eksik, geçersiz veya yenilenemiyorsa açık bir hatayla durur.
+   Normal `main.py` çalışması hiçbir zaman tarayıcı açmaz. Yenilenen token, aynı dizinde
+   `0600` izinli geçici dosyaya yazılır, diske eşitlenir ve atomik olarak değiştirilir.
+   `RefreshError`/`invalid_grant` yeniden yetkilendirme gerektirir; `TransportError`,
+   socket veya timeout hataları geçicidir ve yeniden deneme önerir. Hata mesajları
+   sağlayıcı yanıtını ya da hassas metni içermez.
 
 4. İlk canlı kontrolü production job'ını değiştirmeden yapın:
 
