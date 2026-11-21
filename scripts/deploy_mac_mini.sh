@@ -79,7 +79,23 @@ else
     "$VENV_PYTHON" -m compileall -q main.py telegram_listener.py mail_digest tests scripts
 fi
 
-if ! MAIL_SOURCE=gmail "$VENV_PYTHON" main.py --upcoming --dry-run >/dev/null 2>&1; then
+PREFLIGHT_LOCK="$(mktemp -t inbox_preflight_lock)"
+PREFLIGHT_OUTPUT="$(mktemp -t inbox_preflight_output)"
+trap 'rm -f "$PREFLIGHT_LOCK" "$PREFLIGHT_OUTPUT"' EXIT
+
+PREFLIGHT_STATUS=0
+if MAIL_SOURCE=gmail MAIL_DIGEST_LOCK_FILE="$PREFLIGHT_LOCK" \
+    "$VENV_PYTHON" main.py --upcoming --dry-run >"$PREFLIGHT_OUTPUT" 2>&1; then
+    :
+else
+    PREFLIGHT_STATUS=$?
+fi
+if grep -Fq 'Digest is already running' "$PREFLIGHT_OUTPUT"; then
+    PREFLIGHT_STATUS=1
+fi
+
+if [[ "$PREFLIGHT_STATUS" -ne 0 ]]; then
+    tail -n 20 "$PREFLIGHT_OUTPUT" >&2
     printf 'Gmail ön kontrolü başarısız; önce .venv/bin/python scripts/gmail_auth.py çalıştırın.\n' >&2
     exit 1
 fi
