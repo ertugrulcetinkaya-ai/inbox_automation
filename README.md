@@ -80,7 +80,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 - `mail_digest/sources/gmail/`: Gmail OAuth, salt-okunur API, MIME normalizasyonu, SQLite cache ve history senkronizasyon katmanıdır.
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
-- `mail_digest/services/parse_cache.py`: tarih aralığı ve parser sürümüne bağlı SHA-256 anahtarlarla JSON ayrıştırma sonuçlarını SQLite'ta saklar; cache hatası digest'i engellemez.
+- `mail_digest/services/parse_cache.py`: tarih aralığı ve parser sürümüne bağlı SHA-256 anahtarlarla semantic ayrıştırma sonuçlarını SQLite'ta saklar; cache hatası digest'i engellemez. Recurring ICS master tanımları farklı mailler arasında birleştirilip seçilen seri açılımı servis katmanında yapılır.
 - `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları hash kimlikleriyle kaydeder ve son başarılı reminder taramasını cursor olarak tutarak aynı toplantı için tekrar bildirim gönderilmesini önler.
 - `mail_digest/services/run_status.py` and `mail_digest/services/health.py`: mod başına çalışma durumunu kişisel veri içermeden atomik kaydeder ve ağ kullanmadan `/durum`/`--status` raporunu oluşturur. Gmail token JSON'u yenileme yapmadan okunur; SQLite cache salt-okunur açılır.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
@@ -109,7 +109,7 @@ daily / upcoming Telegram digest
 
 Kod akışı katmanlıdır: `sources` Mail erişimini, `parsing` toplantı çıkarımını, `services` iş kurallarını, `delivery` Telegram gönderimini ve `cli` çalışma akışını taşır. Böylece tarih/ICS parser değişiklikleri Telegram gönderim koduna dokunmadan test edilebilir.
 
-Canonical `Meeting` modeli aşağıdaki alanları taşır. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Aynı UID ve SEQUENCE kayıtlarında `source_received_at` freshness tie-break olarak kullanılır; recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur. UID olmayan lifecycle iletilerinde Gmail `thread_id`, canonical gönderen e-postası ve konu ailesi tarih/saat bağlamıyla eşleştirilir; tarih-only iptaller aynı günün zamanlı davetlerini bastırır.
+Canonical `Meeting` modeli aşağıdaki alanları taşır. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Recurring master tanımları UID başına birleştirilir; en yüksek `SEQUENCE`, eşitlikte en yeni `source_received_at` seçilir. `SEQUENCE` değeri master ile eşit veya yüksek olan `RECURRENCE-ID` override'ı ilgili oluşuma tercih edilir. Recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur ve günlük sınırlar Europe/Istanbul saat diliminden etkinliğin saat dilimine çevrilir. UID olmayan lifecycle iletilerinde Gmail `thread_id`, canonical gönderen e-postası ve konu ailesi tarih/saat bağlamıyla eşleştirilir; tarih-only iptaller aynı günün zamanlı davetlerini bastırır.
 
 ### Meeting modeli
 
