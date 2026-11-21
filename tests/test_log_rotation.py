@@ -7,7 +7,7 @@ import plistlib
 from unittest.mock import patch
 
 from mail_digest.config import PROJECT_ROOT
-from mail_digest.services.log_rotation import rotate_logs
+from mail_digest.services.log_rotation import CLI_LOG_NAMES, LISTENER_LOG_NAMES, rotate_logs
 
 
 class LogRotationTests(unittest.TestCase):
@@ -38,6 +38,45 @@ class LogRotationTests(unittest.TestCase):
             self.assertTrue(log_path.exists())
             self.assertFalse(Path(f"{log_path}.1").exists())
 
+    def test_named_rotation_keeps_cli_and_listener_logs_separate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            all_names = (*CLI_LOG_NAMES, *LISTENER_LOG_NAMES)
+            paths = {name: Path(directory) / name for name in all_names}
+            for path in paths.values():
+                path.write_text("oversized", encoding="utf-8")
+
+            rotate_logs(directory, names=CLI_LOG_NAMES, max_bytes=1)
+
+            for name in CLI_LOG_NAMES:
+                self.assertFalse(paths[name].exists())
+                self.assertTrue(Path(f"{paths[name]}.1").exists())
+            for name in LISTENER_LOG_NAMES:
+                self.assertTrue(paths[name].exists())
+                self.assertFalse(Path(f"{paths[name]}.1").exists())
+
+            rotate_logs(directory, names=LISTENER_LOG_NAMES, max_bytes=1)
+
+            for name in LISTENER_LOG_NAMES:
+                self.assertFalse(paths[name].exists())
+                self.assertTrue(Path(f"{paths[name]}.1").exists())
+
+    def test_configured_log_names_match_launchd_templates(self):
+        from scripts.install_launchd import TEMPLATES, render_template
+
+        cli_names = set()
+        for template_name in ("summary", "reminder"):
+            rendered = plistlib.loads(render_template(TEMPLATES[template_name]))
+            cli_names.add(Path(rendered["StandardOutPath"]).name)
+            cli_names.add(Path(rendered["StandardErrorPath"]).name)
+        listener = plistlib.loads(render_template(TEMPLATES["listener"]))
+        listener_names = {
+            Path(listener["StandardOutPath"]).name,
+            Path(listener["StandardErrorPath"]).name,
+        }
+
+        self.assertEqual(set(CLI_LOG_NAMES), cli_names)
+        self.assertEqual(set(LISTENER_LOG_NAMES), listener_names)
+
     def test_rotation_errors_are_silent(self):
         with tempfile.TemporaryDirectory() as directory:
             log_path = Path(directory) / "listener.log"
@@ -58,7 +97,7 @@ class LogRotationTests(unittest.TestCase):
         ), patch("sys.argv", ["main.py"]):
             self.assertEqual(main(), 0)
 
-        rotate.assert_called_once_with(PROJECT_ROOT / "logs")
+        rotate.assert_called_once_with(PROJECT_ROOT / "logs", names=CLI_LOG_NAMES)
 
     def test_listener_main_rotates_project_logs_before_loading_credentials(self):
         from telegram_listener import main
@@ -69,7 +108,9 @@ class LogRotationTests(unittest.TestCase):
         ), redirect_stdout(output):
             main()
 
-        rotate.assert_called_once_with(PROJECT_ROOT / "logs")
+        rotate.assert_called_once_with(
+            PROJECT_ROOT / "logs", names=LISTENER_LOG_NAMES
+        )
         self.assertIn("Missing TELEGRAM_BOT_TOKEN", output.getvalue())
 
     def test_listener_plist_has_throttle_interval(self):

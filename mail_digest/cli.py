@@ -16,7 +16,7 @@ from .services.meeting_service import (
     format_reminder_digest,
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
-from .services.log_rotation import rotate_logs
+from .services.log_rotation import CLI_LOG_NAMES, rotate_logs
 from .services.reminder_state import (
     load_last_successful_reminder_scan,
     load_sent_reminders,
@@ -140,7 +140,7 @@ def run_digest(upcoming=False, dry_run=False, mode=None):
 
 
 def main():
-    rotate_logs(PROJECT_ROOT / "logs")
+    rotate_logs(PROJECT_ROOT / "logs", names=CLI_LOG_NAMES)
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fetch and format but do not send")
     output_group = parser.add_mutually_exclusive_group()

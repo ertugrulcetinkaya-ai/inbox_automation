@@ -5,6 +5,13 @@ from pathlib import Path
 
 DEFAULT_MAX_LOG_BYTES = 5 * 1024 * 1024
 DEFAULT_LOG_ARCHIVES = 3
+CLI_LOG_NAMES = (
+    "output.log",
+    "error.log",
+    "reminder_output.log",
+    "reminder_error.log",
+)
+LISTENER_LOG_NAMES = ("listener_output.log", "listener_error.log")
 
 
 def _rotate_one(log_path: Path, keep: int) -> None:
@@ -30,16 +37,26 @@ def _rotate_one(log_path: Path, keep: int) -> None:
 
 def rotate_logs(
     log_dir,
+    names=None,
     max_bytes=DEFAULT_MAX_LOG_BYTES,
     keep=DEFAULT_LOG_ARCHIVES,
 ) -> None:
-    """Rotate oversized ``*.log`` files without interrupting the caller."""
+    """Rotate oversized selected logs without interrupting the caller."""
 
     if max_bytes < 0 or keep < 1:
         return
     try:
-        for log_path in Path(log_dir).glob("*.log"):
+        directory = Path(log_dir)
+        selected_names = (names,) if isinstance(names, str) else names
+        candidates = (
+            directory.glob("*.log")
+            if selected_names is None
+            else (directory / name for name in selected_names)
+        )
+        for log_path in candidates:
             try:
+                if log_path.parent != directory or log_path.suffix != ".log":
+                    continue
                 if log_path.is_file() and log_path.stat().st_size > max_bytes:
                     _rotate_one(log_path, keep)
             except Exception:

@@ -18,7 +18,7 @@ except ImportError:
 from mail_digest.cli import run_digest as execute_digest
 from mail_digest.config import PROJECT_ROOT, load_env
 from mail_digest.services.lock import DigestAlreadyRunning
-from mail_digest.services.log_rotation import rotate_logs
+from mail_digest.services.log_rotation import LISTENER_LOG_NAMES, rotate_logs
 
 
 TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
@@ -367,7 +367,7 @@ def process_update(
 
 
 def main():
-    rotate_logs(PROJECT_ROOT / "logs")
+    rotate_logs(PROJECT_ROOT / "logs", names=LISTENER_LOG_NAMES)
     print("Starting Telegram Mail Listener...")
     try:
         env = load_env()
