@@ -9,6 +9,7 @@ Proje yalnızca hedef hesabın birincil gelen kutusunu inceler. Gmail'de normal 
 - Türkçe ve İngilizce toplantı ifadelerini, tarihleri ve saatleri algılar.
 - Önce gerçek iCalendar/ICS verisini parse eder; ICS yoksa semantic metin parser'ına düşer.
 - Tekrarlayan ICS toplantılarını `RRULE`/`RDATE` ile istenen tarih aralığında açar, `EXDATE` günlerini çıkarır; tekil güncellemeleri ve iptalleri `UID + RECURRENCE-ID` ile eşleştirir. Recurrence kimliği UTC ISO biçiminde normalleştirilir; timezone'suz saatler Europe/Istanbul kabul edilir, tüm gün kimliği tarih olarak kalır. Açılım etkinliğin saat dilimini korur ve seri başına 500 occurrence ile sınırlıdır.
+- Upcoming ve dikkat görünümlerinde aynı UID'li recurring seriden yalnızca en yakın occurrence `🔁 Tekrarlayan` etiketiyle gösterilir; günlük, haftalık ve hatırlatma modları tüm occurrence'ları korur.
 - Semantic fallback adaylarını ikinci bir bağlam kontrolünden geçirir: açık toplantı konusu tüm-gün kaydı destekleyebilir; yalnızca gövdeden gelen adaylarda toplantı ifadesi, tarih ve saatin yakın olması gerekir. Mail zinciri başlıkları ve dağınık rapor tarihleri toplantı sayılmaz.
 - `Bugün` ve `yarın` gibi göreli ifadeleri mesajın alındığı tarihe göre yorumlar.
 - Haftanın günlerini çıplak (`Cuma`) veya `bu/önümüzdeki` ve `this/next` gibi göreli ifadelerle gelecek uygun tarihe çözer.

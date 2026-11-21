@@ -215,6 +215,81 @@ class ICSRecurrenceTests(unittest.TestCase):
         self.assertIn("Updated all-day meeting", result.message)
         self.assertNotIn("Synthetic recurring meeting", result.message)
 
+    def test_upcoming_collapses_daily_series_and_marks_the_row(self):
+        recurring = record(
+            event(
+                start="DTSTART;TZID=Europe/Istanbul:20261121T100000",
+                recurrence="RRULE:FREQ=DAILY;COUNT=4",
+            )
+        )
+
+        result = build_digest_result(
+            [recurring], "upcoming", target_date=date(2026, 11, 21)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertEqual(result.message.count("• "), 1)
+        self.assertIn("🔁 Tekrarlayan", result.message)
+
+    def test_weekly_keeps_each_daily_series_occurrence(self):
+        recurring = record(
+            event(
+                start="DTSTART;TZID=Europe/Istanbul:20261121T100000",
+                recurrence="RRULE:FREQ=DAILY;COUNT=3",
+            )
+        )
+
+        result = build_digest_result(
+            [recurring], "weekly", target_date=date(2026, 11, 21)
+        )
+
+        self.assertEqual(result.count, 3)
+        self.assertEqual(result.message.count("• "), 3)
+        self.assertNotIn("🔁 Tekrarlayan", result.message)
+
+    def test_attention_collapses_and_marks_recurring_occurrence(self):
+        recurring = record(
+            event(
+                start="DTSTART;TZID=Europe/Istanbul:20261121T100000",
+                recurrence="RRULE:FREQ=DAILY;COUNT=4",
+                status="TENTATIVE",
+            )
+        )
+
+        result = build_digest_result(
+            [recurring], "attention", target_date=date(2026, 11, 21)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertEqual(result.message.count("• "), 1)
+        self.assertIn("🔁 Tekrarlayan", result.message)
+
+    def test_nearest_shifted_occurrence_is_the_upcoming_series_row(self):
+        recurring = record(
+            event(
+                start="DTSTART;TZID=Europe/Istanbul:20261127T100000",
+                recurrence="RRULE:FREQ=WEEKLY;BYDAY=FR",
+            ),
+            event(
+                sequence=1,
+                start="DTSTART;TZID=Europe/Istanbul:20261122T080000",
+                recurrence_id=(
+                    "RECURRENCE-ID;TZID=Europe/Istanbul:20261204T100000"
+                ),
+                title="Shifted closest occurrence",
+            ),
+        )
+
+        result = build_digest_result(
+            [recurring], "upcoming", target_date=date(2026, 11, 21)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("Shifted closest occurrence", result.message)
+        self.assertIn("08:00", result.message)
+        self.assertIn("22 Kasım 2026", result.message)
+        self.assertNotIn("27 Kasım 2026", result.message)
+
     def test_series_cancellation_suppresses_all_occurrences(self):
         master = friday_series()
         for sequence in (0, 1):

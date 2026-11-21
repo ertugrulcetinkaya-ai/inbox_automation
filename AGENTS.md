@@ -31,6 +31,7 @@
 - Preserve ICS line folding and MIME source in the AppleScript/Python transport; never collapse calendar content into one whitespace-normalized line.
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.
+- In upcoming and attention output, show only the nearest future occurrence for each recurring UID and mark it `🔁 Tekrarlayan`; daily, weekly, and reminder modes keep every occurrence.
 - Preserve both Turkish-character and ASCII Telegram command aliases.
 - `telegram_listener.run_digest()` retains its success text contract for external callers; the listener's command path suppresses only that duplicate confirmation and sends failures or lock-contention responses.
 - Telegram messages are limited to 3,500 characters per part; split at line breaks when possible and hard-cut only a line longer than the limit.
