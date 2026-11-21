@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import socket
 import time
 from collections.abc import Mapping
@@ -73,10 +74,22 @@ class GmailApi:
         if not isinstance(errors, list):
             return ""
         return ",".join(
-            error.get("reason", "")
+            reason
             for error in errors
-            if isinstance(error, dict) and error.get("reason")
+            if isinstance(error, dict)
+            and isinstance(error.get("reason"), str)
+            for reason in [error["reason"]]
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", reason)
         )
+
+    @staticmethod
+    def _http_error_message(exc):
+        status = GmailApi._status(exc)
+        status_text = str(status) if status is not None else "unknown"
+        reason = GmailApi._google_reason(exc)
+        if reason:
+            status_text = f"{status_text} {reason}"
+        return f"Gmail API request failed (HTTP {status_text})"
 
     @staticmethod
     def _retry_after_seconds(exc):
@@ -149,14 +162,16 @@ class GmailApi:
                 rate_limited = self._is_rate_limit_http(exc)
                 max_attempts = RATE_LIMIT_MAX_ATTEMPTS if rate_limited else self.max_attempts
                 if not self._is_retryable_http(exc) or attempt + 1 >= max_attempts:
-                    raise GmailApiError(f"Gmail API request failed (HTTP {status or 'unknown'})") from exc
+                    raise GmailApiError(self._http_error_message(exc)) from exc
                 if rate_limited:
                     delay = self._rate_limit_delay_for_errors([exc], attempt)
                 else:
                     delay = min(4.0, 0.25 * (2 ** attempt)) + random.uniform(0, 0.1)
             except (OSError, socket.timeout, TransportError, httplib2.HttpLib2Error) as exc:
                 if attempt + 1 >= self.max_attempts:
-                    raise GmailApiError("Gmail API network request failed") from exc
+                    raise GmailApiError(
+                        f"Gmail API network request failed ({type(exc).__name__})"
+                    ) from exc
                 delay = min(4.0, 0.25 * (2 ** attempt)) + random.uniform(0, 0.1)
             self.sleep(delay)
         raise GmailApiError("Gmail API retry budget exhausted")
@@ -212,16 +227,16 @@ class GmailApi:
                         elif self._is_retryable_http(exception):
                             retry_ids.append(message_id)
                         else:
-                            raise GmailApiError(
-                                f"Gmail API request failed (HTTP {status or 'unknown'})"
-                            ) from exception
+                            raise GmailApiError(self._http_error_message(exception)) from exception
                     elif isinstance(
                         exception,
                         (OSError, socket.timeout, TransportError, httplib2.HttpLib2Error),
                     ):
                         retry_ids.append(message_id)
                     else:
-                        raise GmailApiError("Gmail batch request failed") from exception
+                        raise GmailApiError(
+                            f"Gmail batch request failed ({type(exception).__name__})"
+                        ) from exception
 
             for message_id in retry_ids:
                 try:
@@ -233,9 +248,7 @@ class GmailApi:
                 return results
             last_error = rate_limit_errors[-1]
             if attempt + 1 >= RATE_LIMIT_MAX_ATTEMPTS:
-                raise GmailApiError(
-                    f"Gmail API request failed (HTTP {self._status(last_error) or 'unknown'})"
-                ) from last_error
+                raise GmailApiError(self._http_error_message(last_error)) from last_error
             self.sleep(self._rate_limit_delay_for_errors(rate_limit_errors, attempt))
             pending = rate_limited
             batch_size = max(1, batch_size // 2)

@@ -16,11 +16,15 @@ class Response(dict):
     reason = "error"
 
 
-def http_error(status, reason="backendError", headers=None):
+def http_error(status, reason="backendError", headers=None, uri=None):
     response = Response()
     response.status = status
     response.update(headers or {})
-    return HttpError(response, json.dumps({"error": {"errors": [{"reason": reason}]}}).encode())
+    return HttpError(
+        response,
+        json.dumps({"error": {"errors": [{"reason": reason}]}}).encode(),
+        uri=uri,
+    )
 
 
 class Request:
@@ -121,6 +125,43 @@ class GmailApiTests(unittest.TestCase):
         self.assertEqual(api._execute(lambda: Request(rate_outcomes)), {"ok": True})
         with self.assertRaises(GmailApiError):
             api._execute(lambda: Request([http_error(401)]))
+
+    def test_http_error_message_has_only_status_and_reason(self):
+        private_uri = (
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/"
+            "synthetic-message-id?format=full"
+        )
+        error = http_error(
+            403,
+            "rateLimitExceeded",
+            uri=private_uri,
+        )
+        api = GmailApi(None, sleep=lambda _: None)
+
+        with self.assertRaises(GmailApiError) as raised:
+            api._execute(lambda: Request([error] * 6))
+
+        message = str(raised.exception)
+        self.assertEqual(
+            message,
+            "Gmail API request failed (HTTP 403 rateLimitExceeded)",
+        )
+        self.assertNotIn("synthetic-message-id", message)
+        self.assertNotIn("googleapis.com", message)
+
+    def test_network_error_message_contains_exception_type_only(self):
+        api = GmailApi(None, max_attempts=1, sleep=lambda _: None)
+
+        with self.assertRaises(GmailApiError) as raised:
+            api._execute(
+                lambda: Request([TimeoutError("private-request-details")])
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            "Gmail API network request failed (TimeoutError)",
+        )
+        self.assertNotIn("private-request-details", str(raised.exception))
 
     def test_message_and_history_404_have_distinct_semantics(self):
         api = GmailApi(None, max_attempts=1)

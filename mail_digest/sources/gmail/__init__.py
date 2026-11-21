@@ -18,7 +18,11 @@ def fetch_mail():
         store = GmailStore(gmail_cache_file())
         return GmailSynchronizer(api, store).sync()
     except (GmailAuthError, GmailApiError, GmailSyncError, MessageStructureError, OSError, sqlite3.Error) as exc:
-        log(f"Gmail sync failed ({exc.__class__.__name__}); run scripts/gmail_auth.py if authorization is required")
+        log(
+            "Gmail sync failed "
+            f"({type(exc).__name__}: {exc}); run scripts/gmail_auth.py "
+            "if authorization is required"
+        )
         return None
     except Exception as exc:
         # Do not turn programming regressions into an apparently normal empty
