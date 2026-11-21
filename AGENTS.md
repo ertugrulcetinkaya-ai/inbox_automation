@@ -44,6 +44,7 @@
 ## Change and verification rules
 
 - Prefer small, explicit patches and keep unrelated working-tree changes untouched.
+- Dotted numeric date/time context checks must scan only the token's nearby window so parser cost does not grow with the full message length per token; preserve parser results and keep a synthetic performance regression test.
 - Add or update tests for parser, command, routing, or deployment changes.
 - Keep parser coverage broad: maintain table-driven date/time/weekday/lifecycle cases, sanitized fixtures under `tests/fixtures/`, duplicate/update regressions, and Mail/Telegram failure-path tests. Fixtures must not contain real personal data or credentials.
 - Run the relevant unit tests, Python compilation, and `git diff --check` before committing.
