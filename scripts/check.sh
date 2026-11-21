@@ -35,6 +35,12 @@ else
     printf 'bandit is not installed; skipping optional security check.\n'
 fi
 
+if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck scripts/check.sh scripts/deploy_mac_mini.sh
+else
+    printf 'shellcheck is not installed; skipping optional shell check.\n'
+fi
+
 if [[ "$audit" == true ]]; then
     if ! command -v pip-audit >/dev/null 2>&1; then
         printf 'pip-audit is not installed; install requirements.quality.lock to use --audit.\n' >&2
