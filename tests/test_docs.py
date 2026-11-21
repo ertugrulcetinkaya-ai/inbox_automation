@@ -15,6 +15,7 @@ from mail_digest.models import Meeting
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 README_PATH = PROJECT_ROOT / "README.md"
 AGENTS_PATH = PROJECT_ROOT / "AGENTS.md"
+PROJECT_MEMORY_PATH = PROJECT_ROOT / "HERMES_PROJECT_MEMORY.md"
 ENV_NAME_RE = re.compile(
     r"\b(?:MAIL_SOURCE|MAIL_DIGEST_[A-Z0-9_]+|GMAIL_[A-Z0-9_]+|"
     r"TELEGRAM_[A-Z0-9_]+|MEETING_REMINDER_[A-Z0-9_]+|LISTENER_[A-Z0-9_]+)\b"
@@ -86,10 +87,19 @@ class DocumentationContractTests(unittest.TestCase):
     def test_readme_meeting_fields_match_the_dataclass(self):
         self.assertEqual(_meeting_field_table(_readme_text()), [item.name for item in fields(Meeting)])
 
-    def test_readme_and_agents_do_not_reference_deleted_project_memory(self):
-        for path in (README_PATH, AGENTS_PATH):
-            with self.subTest(path=path.name):
-                self.assertNotIn("HERMES_PROJECT_MEMORY", path.read_text(encoding="utf-8"))
+    def test_readme_is_canonical_and_agents_forbid_project_memory_file(self):
+        readme = README_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("HERMES_PROJECT_MEMORY", readme)
+        self.assertIn("PYTHONUNBUFFERED=1", readme)
+        self.assertIn("flush=True", readme)
+        self.assertIn(
+            "Davranış ve operasyon değişiklikleri yalnızca README.md'de belgelenir; "
+            "HERMES_PROJECT_MEMORY.md oluşturulmaz.",
+            AGENTS_PATH.read_text(encoding="utf-8"),
+        )
+
+    def test_project_memory_file_is_absent(self):
+        self.assertFalse(PROJECT_MEMORY_PATH.exists())
 
     def test_documented_environment_names_match_code_reads(self):
         documented = set(ENV_NAME_RE.findall(_readme_text()))
