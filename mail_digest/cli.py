@@ -136,24 +136,27 @@ def run_digest(upcoming=False, dry_run=False, mode=None):
 
     with digest_lock():
         selected_mode = mode or ("upcoming" if upcoming else "daily")
-        record_run_started(selected_mode)
+        if not dry_run:
+            record_run_started(selected_mode)
         kwargs = {"upcoming": upcoming, "dry_run": dry_run}
         if mode is not None:
             kwargs["mode"] = mode
         try:
             result = _run_digest(**kwargs)
         except Exception as exc:
+            if not dry_run:
+                record_run_finished(
+                    selected_mode,
+                    succeeded=False,
+                    error_type=exc.__class__,
+                )
+            raise
+        if not dry_run:
             record_run_finished(
                 selected_mode,
-                succeeded=False,
-                error_type=exc.__class__,
+                succeeded=result == 0,
+                error_type="DigestFailed" if result != 0 else None,
             )
-            raise
-        record_run_finished(
-            selected_mode,
-            succeeded=result == 0,
-            error_type="DigestFailed" if result != 0 else None,
-        )
         return result
 
 

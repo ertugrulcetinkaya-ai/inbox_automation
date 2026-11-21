@@ -164,7 +164,7 @@ class HealthStatusTests(unittest.TestCase):
         with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
             "mail_digest.cli._run_digest", return_value=0
         ):
-            self.assertEqual(run_digest(mode="weekly", dry_run=True), 0)
+            self.assertEqual(run_digest(mode="weekly"), 0)
 
         payload = json.loads(self.status_path.read_text(encoding="utf-8"))
         weekly = payload["modes"]["weekly"]
@@ -201,6 +201,21 @@ class HealthStatusTests(unittest.TestCase):
         daily = json.loads(self.status_path.read_text(encoding="utf-8"))["modes"]["daily"]
         self.assertIn("last_failure_at", daily)
         self.assertEqual(daily["last_error_type"], "DigestFailed")
+
+    def test_dry_run_does_not_change_status_file(self):
+        status_before = b'{"modes":{"daily":{"sentinel":"unchanged"}}}\n'
+        self.status_path.write_bytes(status_before)
+        lock_path = self.root / "digest.lock"
+        with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+            "mail_digest.cli._run_digest", return_value=0
+        ), patch("mail_digest.cli.record_run_started") as started, patch(
+            "mail_digest.cli.record_run_finished"
+        ) as finished:
+            self.assertEqual(run_digest(dry_run=True), 0)
+
+        self.assertEqual(self.status_path.read_bytes(), status_before)
+        started.assert_not_called()
+        finished.assert_not_called()
 
     def test_status_write_error_does_not_escape(self):
         with patch(
