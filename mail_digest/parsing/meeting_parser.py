@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, time as datetime_time
+from datetime import date, datetime, time as datetime_time, timedelta
 
 from ..config import (
     CALENDAR_MARKERS,
@@ -284,7 +284,12 @@ def extract_meetings(
     received_date = _received_date_for_record(record, start_date)
 
     # Calendar data is authoritative and is parsed before subject filtering.
-    ics_meetings = parse_ics_meetings(record)
+    ics_end_date = end_date if end_date is not None else start_date + timedelta(days=60)
+    ics_meetings = parse_ics_meetings(
+        record,
+        range_start=start_date,
+        range_end=ics_end_date,
+    )
     if ics_meetings is not None:
         digest_records = []
         for index, meeting in enumerate(ics_meetings):

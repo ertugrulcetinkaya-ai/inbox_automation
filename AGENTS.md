@@ -25,6 +25,7 @@
 - Parse inline ICS and MIME `text/calendar`/`.ics` payloads before semantic text fallback. A neutral subject must not hide a valid calendar invitation.
 - Normalize lifecycle state to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; never list cancelled events, and never leave the old date of a rescheduled event active.
 - For repeated ICS events, resolve by `UID` and highest `SEQUENCE`; `METHOD:CANCEL` takes precedence at equal sequence.
+- Expand recurring ICS masters with `RRULE` and `RDATE` in the requested range, remove `EXDATE`, preserve event timezone/DST, and cap each series at 500 occurrences. Match instance updates by `UID + RECURRENCE-ID`; equal-or-higher sequence master cancellations suppress the series.
 - Preserve ICS line folding and MIME source in the AppleScript/Python transport; never collapse calendar content into one whitespace-normalized line.
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.

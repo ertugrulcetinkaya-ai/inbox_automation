@@ -8,6 +8,7 @@ Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 günde
 
 - Türkçe ve İngilizce toplantı ifadelerini, tarihleri ve saatleri algılar.
 - Önce gerçek iCalendar/ICS verisini parse eder; ICS yoksa semantic metin parser'ına düşer.
+- Tekrarlayan ICS toplantılarını `RRULE`/`RDATE` ile istenen tarih aralığında açar, `EXDATE` günlerini çıkarır; tekil güncellemeleri ve iptalleri `UID + RECURRENCE-ID` ile eşleştirir. Açılım etkinliğin saat dilimini korur ve seri başına 500 occurrence ile sınırlıdır.
 - Semantic fallback adaylarını ikinci bir bağlam kontrolünden geçirir: açık toplantı konusu tüm-gün kaydı destekleyebilir; yalnızca gövdeden gelen adaylarda toplantı ifadesi, tarih ve saatin yakın olması gerekir. Mail zinciri başlıkları ve dağınık rapor tarihleri toplantı sayılmaz.
 - `Bugün` ve `yarın` gibi göreli ifadeleri mesajın alındığı tarihe göre yorumlar.
 - Haftanın günlerini çıplak (`Cuma`) veya `bu/önümüzdeki` ve `this/next` gibi göreli ifadelerle gelecek uygun tarihe çözer.
@@ -164,9 +165,10 @@ Gmail MIME gövdeleri bounded policy ile işlenir (`MAX_BODY_BYTES=256 KiB`, `MA
 Semantic body-only toplantılarda tarih ve saat birlikte aranır. Bunun istisnası,
 aynı tarih bağlamında açık toplantı ve iptal ifadesi bulunan date-only semantic
 cancellation'dır: eski davetin saati korunarak lifecycle eşleştirmesine bırakılır.
-ICS motoru ayrıca somut mailbox occurrence'larını işler; bir recurring master
-invite'tan `RRULE`/`RDATE`/`EXDATE` ile tüm gelecek occurrence'ları üretme garantisi
-v1 kapsamında yoktur.
+ICS motoru recurring master davetlerini yalnızca istenen aralık için açar; günlük,
+haftalık ve gelecek görünümleri kendi aralıklarıyla sınırlıdır. Seri ana iptali
+eşit veya daha yüksek `SEQUENCE` ile tüm occurrence'ları bastırır;
+`RECURRENCE-ID` taşıyan tekil iptal yalnızca ilgili occurrence'ı kaldırır.
 
 Komut varsayılan olarak yalnızca preview üretir; gerçek production job bu repository değişikliğiyle Gmail'e çevrilmez. Çok parçalı Telegram gönderiminde tüm parçalar başarılı olmadan reminder state ilerletilmez; Telegram'ın çoklu mesaj transaction'ı olmadığı için başarısız kısmi gönderimin daha sonraki denemede önceki parçaları tekrarlaması mümkündür.
 

@@ -192,6 +192,13 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
             latest_by_event[key] = meeting
 
     resolved = list(latest_by_event.values()) + without_uid
+    series_cancellations = [
+        meeting
+        for meeting in resolved
+        if meeting.get("uid")
+        and not meeting.get("recurrence_id")
+        and meeting.get("status") == "CANCELLED"
+    ]
     # Semantic mail has no authoritative UID. Correlate lifecycle messages in
     # a narrow order: Gmail thread ID first, then canonical sender email plus
     # subject family, always scoped to the affected occurrence date/time. A
@@ -211,6 +218,13 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
     for meeting in resolved:
         status = meeting.get("status", "CONFIRMED")
         if status == "CANCELLED":
+            continue
+        recurrence_id = meeting.get("recurrence_id")
+        if recurrence_id and any(
+            cancellation.get("uid") == meeting.get("uid")
+            and cancellation.get("sequence", 0) >= meeting.get("sequence", 0)
+            for cancellation in series_cancellations
+        ):
             continue
         identity = semantic_identity(meeting) if not meeting.get("uid") else None
         lifecycle_suppressed = any(

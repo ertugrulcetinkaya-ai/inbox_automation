@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import date, datetime, timezone as dt_timezone
+from dataclasses import replace
+from datetime import date, datetime, time as dt_time, timedelta, timezone as dt_timezone
 from email import policy
 from email.parser import Parser
 
-from ..config import ICS_MARKERS
+from dateutil.rrule import rrulestr
+
+from ..config import ICS_MARKERS, local_now
 from ..models import Meeting
 from ..utils import record_source_received_at
 from .dates import parse_received_date
+
+
+MAX_RECURRENCES_PER_SERIES = 500
+DEFAULT_RECURRENCE_RANGE_DAYS = 60
 
 try:
     from zoneinfo import ZoneInfo
@@ -198,7 +205,7 @@ def _ics_should_replace(current, candidate):
     return candidate.source_message_id > current.source_message_id
 
 
-def _parse_ics_event(lines, record, calendar_method=""):
+def _parse_ics_properties(lines):
     properties = {}
     for line in lines:
         parsed = _parse_ics_property(line)
@@ -206,6 +213,11 @@ def _parse_ics_event(lines, record, calendar_method=""):
             continue
         name, params, value = parsed
         properties.setdefault(name, []).append((params, value))
+    return properties
+
+
+def _parse_ics_event(lines, record, calendar_method="", properties=None):
+    properties = properties if properties is not None else _parse_ics_properties(lines)
 
     _, summary = _ics_first(properties, "SUMMARY")
     _, uid = _ics_first(properties, "UID")
@@ -274,6 +286,172 @@ def _parse_ics_event(lines, record, calendar_method=""):
     )
 
 
+def _rule_start(start_at):
+    if isinstance(start_at, datetime):
+        return start_at, False
+    return datetime.combine(start_at, dt_time.min), True
+
+
+def _recurrence_datetime(value, params, rule_start, all_day):
+    parsed, _ = _parse_ics_datetime(value, params)
+    if parsed is None:
+        return None
+    if all_day:
+        if isinstance(parsed, datetime):
+            if parsed.time() != dt_time.min:
+                return None
+            return parsed.date()
+        return parsed
+    if isinstance(parsed, date) and not isinstance(parsed, datetime):
+        return None
+    if rule_start.tzinfo is not None:
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=rule_start.tzinfo)
+        return parsed.astimezone(rule_start.tzinfo)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(dt_timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _recurrence_bound(value, rule_start, all_day, is_end):
+    if value is None:
+        return None
+    if all_day:
+        bound_date = value.date() if isinstance(value, datetime) else value
+        return datetime.combine(
+            bound_date,
+            dt_time.max if is_end else dt_time.min,
+        )
+    if isinstance(value, datetime):
+        bound = value
+    else:
+        bound = datetime.combine(
+            value,
+            dt_time.max if is_end else dt_time.min,
+        )
+    if rule_start.tzinfo is not None:
+        if bound.tzinfo is None:
+            return bound.replace(tzinfo=rule_start.tzinfo)
+        return bound.astimezone(rule_start.tzinfo)
+    if bound.tzinfo is not None:
+        return bound.astimezone(dt_timezone.utc).replace(tzinfo=None)
+    return bound
+
+
+def _normalize_rrule_until(rule_text, rule_start):
+    parts = rule_text.split(";")
+    normalized_parts = []
+    until_limit = None
+    for part in parts:
+        key, separator, value = part.partition("=")
+        if not separator or key.upper() != "UNTIL":
+            normalized_parts.append(part)
+            continue
+        until, _ = _parse_ics_datetime(value, {})
+        if isinstance(until, date) and not isinstance(until, datetime):
+            until_limit = datetime.combine(until, dt_time.max)
+            if rule_start.tzinfo is not None:
+                until_limit = until_limit.replace(tzinfo=rule_start.tzinfo)
+        else:
+            if isinstance(until, datetime) and rule_start.tzinfo is not None:
+                if until.tzinfo is None:
+                    until_limit = until.replace(tzinfo=rule_start.tzinfo)
+                else:
+                    until_limit = until.astimezone(rule_start.tzinfo)
+            elif isinstance(until, datetime) and until.tzinfo is not None:
+                until_limit = until.astimezone(dt_timezone.utc).replace(tzinfo=None)
+            else:
+                until_limit = until
+        # The dateutil recurrence is generated in DTSTART's timezone. Apply
+        # UNTIL as an aware local cutoff ourselves so UTC UNTIL values retain
+        # their instant while local wall-clock times remain stable over DST.
+    return ";".join(normalized_parts), until_limit
+
+
+def _expand_ics_series(meeting, properties, range_start, range_end):
+    if meeting.start_at is None:
+        return [meeting]
+    rule_start, all_day = _rule_start(meeting.start_at)
+    rule_values = [value for _, value in properties.get("RRULE", [])]
+    date_values = properties.get("RDATE", [])
+    if not rule_values and not date_values:
+        return [meeting]
+
+    lower_bound = _recurrence_bound(range_start, rule_start, all_day, False)
+    upper_bound = _recurrence_bound(range_end, rule_start, all_day, True)
+    if lower_bound is None or upper_bound is None:
+        return [meeting]
+    candidate_occurrences = set()
+    if lower_bound <= rule_start <= upper_bound:
+        candidate_occurrences.add(rule_start)
+    for rule_text in rule_values:
+        normalized_rule, until_limit = _normalize_rrule_until(rule_text, rule_start)
+        try:
+            rule = rrulestr(normalized_rule, dtstart=rule_start)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        for occurrence in rule.xafter(
+            lower_bound,
+            count=MAX_RECURRENCES_PER_SERIES,
+            inc=True,
+        ):
+            if occurrence > upper_bound or (
+                until_limit is not None and occurrence > until_limit
+            ):
+                break
+            candidate_occurrences.add(occurrence)
+
+    for params, values in date_values:
+        for value in values.split(","):
+            parsed = _recurrence_datetime(value, params, rule_start, all_day)
+            if parsed is None:
+                continue
+            if all_day:
+                parsed = datetime.combine(parsed, dt_time.min)
+            candidate_occurrences.add(parsed)
+
+    excluded = set()
+    for params, values in properties.get("EXDATE", []):
+        for value in values.split(","):
+            parsed = _recurrence_datetime(value, params, rule_start, all_day)
+            if parsed is None:
+                continue
+            if all_day:
+                parsed = datetime.combine(parsed, dt_time.min)
+            excluded.add(parsed)
+    duration = None
+    if isinstance(meeting.start_at, datetime) and isinstance(meeting.end_at, datetime):
+        duration = meeting.end_at - meeting.start_at
+    elif isinstance(meeting.start_at, date) and isinstance(meeting.end_at, date):
+        duration = datetime.combine(meeting.end_at, dt_time.min) - datetime.combine(
+            meeting.start_at,
+            dt_time.min,
+        )
+
+    occurrences = []
+    for occurrence in sorted(candidate_occurrences - excluded):
+        if occurrence < lower_bound or occurrence > upper_bound:
+            continue
+        if len(occurrences) >= MAX_RECURRENCES_PER_SERIES:
+            break
+        occurrence_start = occurrence.date() if all_day else occurrence
+        occurrence_end = None
+        if duration is not None:
+            if all_day:
+                occurrence_end = occurrence_start + duration
+            else:
+                occurrence_end = occurrence + duration
+        occurrences.append(
+            replace(
+                meeting,
+                start_at=occurrence_start,
+                end_at=occurrence_end,
+                recurrence_id=occurrence_start,
+            )
+        )
+    return occurrences
+
+
 def _ics_payloads_from_record(record):
     payloads = []
     detected = False
@@ -310,23 +488,47 @@ def _ics_payloads_from_record(record):
     return detected, payloads
 
 
-def parse_ics_meetings(record):
-    """Return ICS meetings, or None when the record has no calendar payload."""
+def parse_ics_meetings(record, range_start=None, range_end=None):
+    """Return parsed ICS meetings, expanding recurring series in the range."""
     detected, payloads = _ics_payloads_from_record(record)
     if not detected:
         return None
 
-    meetings = []
+    if range_start is None:
+        range_start = local_now().date()
+    range_start_date = range_start.date() if isinstance(range_start, datetime) else range_start
+    if range_end is None:
+        range_end = range_start_date + timedelta(days=DEFAULT_RECURRENCE_RANGE_DAYS)
+
+    masters = {}
+    overrides = {}
     for payload in payloads:
         _, blocks = _ics_event_blocks(payload)
         for calendar_method, block in blocks:
-            meeting = _parse_ics_event(block, record, calendar_method)
+            properties = _parse_ics_properties(block)
+            meeting = _parse_ics_event(block, record, calendar_method, properties)
             if meeting is None:
                 continue
+            destination = overrides if meeting.recurrence_id is not None else masters
             key = _ics_event_key(meeting)
-            existing = next((item for item in meetings if _ics_event_key(item) == key), None)
-            if existing is None:
-                meetings.append(meeting)
-            elif _ics_should_replace(existing, meeting):
-                meetings[meetings.index(existing)] = meeting
-    return meetings
+            existing = destination.get(key)
+            if existing is None or _ics_should_replace(existing[0], meeting):
+                destination[key] = (meeting, properties)
+
+    meetings_by_key = {}
+    for meeting, properties in masters.values():
+        if meeting.status == "CANCELLED":
+            meetings_by_key[_ics_event_key(meeting)] = meeting
+            continue
+        recurring = _expand_ics_series(meeting, properties, range_start, range_end)
+        for occurrence in recurring:
+            meetings_by_key[_ics_event_key(occurrence)] = occurrence
+
+    for meeting, _ in overrides.values():
+        key = _ics_event_key(meeting)
+        current = meetings_by_key.get(key)
+        if current is None or _ics_should_replace(current, meeting) or (
+            current.sequence == meeting.sequence
+        ):
+            meetings_by_key[key] = meeting
+    return list(meetings_by_key.values())
