@@ -1,13 +1,15 @@
 # Inbox Automation
 
-`inbox_automation`, `ertugrul@cetinkayalar.com` hesabının üretim Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Apple Mail yalnızca rollback kaynağı olarak korunur. Üretim launchd ortamı `MAIL_SOURCE=gmail` kullanır; ortam değişkeni yoksa kodun güvenli yerel varsayılanı `apple_mail` olarak kalır.
+`inbox_automation`, `ertugrul@cetinkayalar.com` hesabının üretim Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Gmail varsayılan kaynaktır; Apple Mail yalnızca `MAIL_SOURCE=apple_mail` açıkça verildiğinde rollback kaynağı olarak kullanılır.
 
-Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 gündeki mesajları inceler. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
+Proje yalnızca hedef hesabın birincil gelen kutusunu inceler. Gmail'de normal mesajlar 30 gün, takvim payload'ı (`raw_source`) bulunan mesajlar 366 gün saklanır; Apple Mail rollback yolu 30 günle sınırlıdır. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
 
 ## Ne yapar?
 
 - Türkçe ve İngilizce toplantı ifadelerini, tarihleri ve saatleri algılar.
 - Önce gerçek iCalendar/ICS verisini parse eder; ICS yoksa semantic metin parser'ına düşer.
+- Tekrarlayan ICS toplantılarını `RRULE`/`RDATE` ile istenen tarih aralığında açar, `EXDATE` günlerini çıkarır; tekil güncellemeleri ve iptalleri `UID + RECURRENCE-ID` ile eşleştirir. Recurrence kimliği UTC ISO biçiminde normalleştirilir; timezone'suz saatler Europe/Istanbul kabul edilir, tüm gün kimliği tarih olarak kalır. Açılım etkinliğin saat dilimini korur ve seri başına 500 occurrence ile sınırlıdır.
+- Upcoming ve dikkat görünümlerinde aynı UID'li recurring seriden yalnızca en yakın occurrence `🔁 Tekrarlayan` etiketiyle gösterilir; günlük, haftalık ve hatırlatma modları tüm occurrence'ları korur.
 - Semantic fallback adaylarını ikinci bir bağlam kontrolünden geçirir: açık toplantı konusu tüm-gün kaydı destekleyebilir; yalnızca gövdeden gelen adaylarda toplantı ifadesi, tarih ve saatin yakın olması gerekir. Mail zinciri başlıkları ve dağınık rapor tarihleri toplantı sayılmaz.
 - `Bugün` ve `yarın` gibi göreli ifadeleri mesajın alındığı tarihe göre yorumlar.
 - Haftanın günlerini çıplak (`Cuma`) veya `bu/önümüzdeki` ve `this/next` gibi göreli ifadelerle gelecek uygun tarihe çözer.
@@ -32,6 +34,8 @@ Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan k
 | Dikkat gerektiren toplantılar | `/dikkat` | `/attention` |
 | Servis durumu | `/durum` | `/status` |
 
+`/durum` ve `/status`, her digest modunun son başarı/başarısızlık zamanını, seçili mail kaynağını, Gmail token dosyasının izin ve süre bilgisini, salt-okunur cache yaşını/kayıt sayısını ve son hatırlatma taramasını gösterir. Rapor yalnızca yerel dosyaları okur; OAuth token'ını yenilemez. `main.py --status --dry-run` raporu terminale yazar; `main.py --status` Telegram'a gönderir. Her gerçek (dry-run olmayan) `run_digest()` çağrısı mod başına zamanları varsayılan `~/.hermes_local_automation/mail_digest/status.json` dosyasına atomik ve `0600` izinle kaydeder; dry-run bu dosyayı değiştirmez. Yolu `MAIL_DIGEST_STATUS_FILE` ile değiştirebilirsiniz. Durum kaydı yazılamazsa yalnızca hata sınıfı loglanır ve digest devam eder.
+
 `telegram_listener.run_digest()` dış çağıranlara günlük, gelecek, haftalık ve dikkat özeti için başarı metni döndürür. Listener'ın kendi komut yolu bu başarı onayını tekrar göndermez; hata ve özetin hâlihazırda hazırlanmakta olduğunu bildiren yanıtları iletir.
 
 Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonlarında bölünür; tek bir satır sınırı aşıyorsa yalnızca o satır sert sınırdan kesilir.
@@ -55,6 +59,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
 - `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları hash kimlikleriyle kaydeder ve son başarılı reminder taramasını cursor olarak tutarak aynı toplantı için tekrar bildirim gönderilmesini önler.
+- `mail_digest/services/run_status.py` and `mail_digest/services/health.py`: mod başına çalışma durumunu kişisel veri içermeden atomik kaydeder ve ağ kullanmadan `/durum`/`--status` raporunu oluşturur. Gmail token JSON'u yenileme yapmadan okunur; SQLite cache salt-okunur açılır.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
 - `mail_digest/services/log_rotation.py`: CLI ve bağımsız listener başlarken yalnızca kendi launchd log adlarını `PROJECT_ROOT/logs` altında, 5 MiB'tan büyükler için en fazla üç arşivle ve hata yutacak şekilde döndürür.
 - `mail_digest/delivery/telegram.py`: yalnızca Telegram gönderim katmanını içerir; parser katmanına bağımlı değildir.
@@ -67,7 +72,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 ### ICS-first veri akışı
 
 ```text
-Gmail API production kaynağı veya Apple Mail rollback kaynağı (son 30 gün)
+Gmail API production kaynağı (normal mesajlar 30 gün, takvim payload'ı 366 gün) veya Apple Mail rollback kaynağı (30 gün)
    ↓
 her mesajın gövdesi + takvim sinyali olanlarda raw MIME source
    ↓
@@ -149,7 +154,7 @@ Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth
 
 Varsayılan yollar `~/.hermes_local_automation/gmail/token.json` ve `~/.hermes_local_automation/gmail/cache.sqlite3`'tür. Sırasıyla `GMAIL_CREDENTIALS_FILE`, `GMAIL_TOKEN_FILE` ve `GMAIL_CACHE_FILE` ile değiştirilebilir. Bu credential, token ve cache dosyalarını repoya koymayın.
 
-İlk Gmail çalışması, `getProfile` history sınırını snapshot'tan önce alır; 31 günlük sunucu sorgusunu yerel kesin 30×24 saat filtresiyle daraltır, bağımsız staging snapshot oluşturur, snapshot sırasında oluşan history değişikliklerini güncel mesaj durumuyla uzlaştırır ve cache ile checkpoint'i tek SQLite transaction'ında etkinleştirir. Sonraki çalışmalar yalnızca checkpoint sonrasındaki `messagesAdded`, `messagesDeleted`, `labelsAdded` ve `labelsRemoved` değişikliklerini uzlaştırır. Eski history checkpoint'i HTTP 404 verirse güvenli tam sync yeniden başlar. Mesaj içeriği bozuksa yapısal kimlik/INBOX/tarih bilgisi geçerli olduğu sürece boş içerikli degraded kayıt saklanır.
+İlk Gmail çalışması, `getProfile` history sınırını snapshot'tan önce alır; 31 günlük normal mesaj ve 367 günlük ICS sunucu sorgularını retention sınırlarıyla daraltır, staging snapshot oluşturur ve cache/checkpoint/`retention_version=2` değerini aynı SQLite transaction'ında etkinleştirir. Checkpoint'i olan eski veya retention sürümü eksik cache bir kez tam sync edilir; sonraki çalışmalar yalnızca checkpoint sonrasındaki `messagesAdded`, `messagesDeleted`, `labelsAdded` ve `labelsRemoved` değişikliklerini uzlaştırır. Eski history checkpoint'i HTTP 404 verirse güvenli tam sync yeniden başlar. Mesaj içeriği bozuksa yapısal kimlik/INBOX/tarih bilgisi geçerli olduğu sürece boş içerikli degraded kayıt saklanır.
 
 Production transport Gmail'dir: `MAIL_SOURCE=gmail` kullanın. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest başarısız olur. launchd dosyalarını Gmail ayarlarıyla preview olarak üretmek için:
 
@@ -164,9 +169,10 @@ Gmail MIME gövdeleri bounded policy ile işlenir (`MAX_BODY_BYTES=256 KiB`, `MA
 Semantic body-only toplantılarda tarih ve saat birlikte aranır. Bunun istisnası,
 aynı tarih bağlamında açık toplantı ve iptal ifadesi bulunan date-only semantic
 cancellation'dır: eski davetin saati korunarak lifecycle eşleştirmesine bırakılır.
-ICS motoru ayrıca somut mailbox occurrence'larını işler; bir recurring master
-invite'tan `RRULE`/`RDATE`/`EXDATE` ile tüm gelecek occurrence'ları üretme garantisi
-v1 kapsamında yoktur.
+ICS motoru recurring master davetlerini yalnızca istenen aralık için açar; günlük,
+haftalık ve gelecek görünümleri kendi aralıklarıyla sınırlıdır. Seri ana iptali
+eşit veya daha yüksek `SEQUENCE` ile tüm occurrence'ları bastırır;
+`RECURRENCE-ID` taşıyan tekil iptal yalnızca ilgili occurrence'ı kaldırır.
 
 Komut varsayılan olarak yalnızca preview üretir; gerçek production job bu repository değişikliğiyle Gmail'e çevrilmez. Çok parçalı Telegram gönderiminde tüm parçalar başarılı olmadan reminder state ilerletilmez; Telegram'ın çoklu mesaj transaction'ı olmadığı için başarısız kısmi gönderimin daha sonraki denemede önceki parçaları tekrarlaması mümkündür.
 

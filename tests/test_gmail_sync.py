@@ -1,13 +1,21 @@
 import base64
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from mail_digest.sources.gmail.api import GmailApiError, GmailHistoryExpired, GmailNotFound
 from mail_digest.sources.gmail.auth import GmailAuthError
 from mail_digest.sources.gmail.store import GmailStore
-from mail_digest.sources.gmail.sync import GmailSynchronizer, WINDOW_MS
+from mail_digest.services.meeting_service import build_digest_result
+from mail_digest.sources.gmail.sync import (
+    CALENDAR_WINDOW_MS,
+    FULL_SYNC_QUERIES,
+    GmailSynchronizer,
+    WINDOW_MS,
+)
 
 
 NOW_MS = 1_800_000_000_000
@@ -37,6 +45,22 @@ def full_message(message_id, *, inbox=True, age_ms=1000, content="ordinary", sub
     }
 
 
+def calendar_message(message_id, *, age_ms, calendar):
+    value = full_message(message_id, age_ms=age_ms)
+    value["payload"] = {
+        "mimeType": "multipart/mixed",
+        "filename": "",
+        "headers": value["payload"]["headers"],
+        "parts": [{
+            "mimeType": "text/calendar",
+            "filename": "invite.ics",
+            "headers": [],
+            "body": {"data": encoded(calendar)},
+        }],
+    }
+    return value
+
+
 def history_page(history_id, records=None, next_token=None):
     page = {"historyId": str(history_id), "history": records or []}
     if next_token:
@@ -55,6 +79,8 @@ class FakeApi:
     def __init__(self):
         self.profiles = [{"historyId": "100"}]
         self.listed = []
+        self.listed_by_query = {}
+        self.list_queries = []
         self.history = {"100": [history_page("101")]}
         self.messages = {}
         self.get_calls = []
@@ -66,8 +92,9 @@ class FakeApi:
             raise value
         return value
 
-    def iter_message_ids(self):
-        yield from self.listed
+    def iter_message_ids(self, query):
+        self.list_queries.append(query)
+        yield from self.listed_by_query.get(query, self.listed)
 
     def iter_history(self, start):
         self.history_calls.append(start)
@@ -112,7 +139,17 @@ class GmailSyncTests(unittest.TestCase):
             "sender": "old", "subject": "old", "date": "old", "received_local_date": "2026-08-19",
             "content": "old", "source_message_id": "old", "raw_source": "",
         }
-        self.store.apply_incremental([("upsert", record)], "90", NOW_MS - WINDOW_MS)
+        self.store.apply_incremental(
+            [("upsert", record)],
+            "90",
+            NOW_MS - WINDOW_MS,
+            NOW_MS - CALENDAR_WINDOW_MS,
+        )
+        with self.store.connection:
+            self.store.connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('retention_version', '2') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+            )
 
     def test_full_sync_arrival_after_boundary_is_reconciled(self):
         self.api.messages["new"] = full_message("new")
@@ -235,7 +272,7 @@ class GmailSyncTests(unittest.TestCase):
                 "gmail_message_id": message_id, "thread_id": "t", "internal_date_ms": NOW_MS - 100,
                 "sender": "x", "subject": "x", "date": "x", "received_local_date": "2026-08-19",
                 "content": "x", "source_message_id": message_id, "raw_source": "",
-            })], "90", NOW_MS - WINDOW_MS)
+            })], "90", NOW_MS - WINDOW_MS, NOW_MS - CALENDAR_WINDOW_MS)
         self.api.messages = {
             "deleted": GmailNotFound("gone"),
             "out": full_message("out", inbox=False),
@@ -248,6 +285,98 @@ class GmailSyncTests(unittest.TestCase):
         ]
         self.api.history["90"] = [history_page("95", changes)]
         self.sync.incremental_sync("90")
+        self.assertEqual(self.ids(), [])
+
+    def _today(self):
+        return datetime.fromtimestamp(
+            NOW_MS / 1000, ZoneInfo("Europe/Istanbul")
+        ).date()
+
+    def _forty_day_calendar(self, message_id="calendar-40d"):
+        today = self._today()
+        first_date = today - timedelta(days=40)
+        calendar = (
+            "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n"
+            "UID:synthetic-retention-series\n"
+            f"DTSTART;TZID=Europe/Istanbul:{first_date:%Y%m%d}T100000\n"
+            "RRULE:FREQ=DAILY;COUNT=41\n"
+            "SUMMARY:Synthetic retention test\n"
+            "END:VEVENT\nEND:VCALENDAR"
+        )
+        return calendar_message(
+            message_id,
+            age_ms=40 * 86400 * 1000,
+            calendar=calendar,
+        )
+
+    def test_full_sync_keeps_40_day_calendar_invite_and_today_occurrence(self):
+        self.api.listed_by_query = {
+            FULL_SYNC_QUERIES[0]: [],
+            FULL_SYNC_QUERIES[1]: ["calendar-40d"],
+        }
+        self.api.messages["calendar-40d"] = self._forty_day_calendar()
+
+        self.sync.full_sync()
+
+        digest = build_digest_result(
+            self.store.records(), "daily", target_date=self._today()
+        )
+        self.assertEqual(self.ids(), ["calendar-40d"])
+        self.assertEqual(self.store.retention_version(), "2")
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+        self.assertEqual(digest.count, 1)
+        self.assertIn("10:00", digest.message)
+
+    def test_incremental_sync_keeps_40_day_calendar_invite_and_today_occurrence(self):
+        self.api.messages["calendar-40d"] = self._forty_day_calendar()
+        self.api.history["90"] = [
+            history_page("91", [event("messagesAdded", "calendar-40d")])
+        ]
+
+        self.sync.incremental_sync("90")
+
+        digest = build_digest_result(
+            self.store.records(), "daily", target_date=self._today()
+        )
+        self.assertEqual(self.ids(), ["calendar-40d"])
+        self.assertEqual(digest.count, 1)
+        self.assertIn("10:00", digest.message)
+
+    def test_incremental_sync_removes_40_day_normal_mail(self):
+        self.api.messages["normal-40d"] = full_message(
+            "normal-40d", age_ms=40 * 86400 * 1000
+        )
+        self.api.history["90"] = [
+            history_page("91", [event("messagesAdded", "normal-40d")])
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.ids(), [])
+
+    def test_full_sync_prunes_cached_400_day_calendar_invite(self):
+        old_record = {
+            "gmail_message_id": "calendar-400d",
+            "thread_id": "synthetic-thread",
+            "internal_date_ms": NOW_MS - 400 * 86400 * 1000,
+            "sender": "Synthetic Organizer <organizer@example.test>",
+            "subject": "Synthetic calendar event",
+            "date": "synthetic date",
+            "received_local_date": "synthetic date",
+            "content": "",
+            "source_message_id": "synthetic-400d@example.test",
+            "raw_source": "BEGIN:VCALENDAR\\nEND:VCALENDAR",
+        }
+        self.store.stage_upsert(old_record)
+        self.store.activate_staging(
+            "90",
+            NOW_MS - 500 * 86400 * 1000,
+            NOW_MS - 500 * 86400 * 1000,
+        )
+        self.api.listed_by_query = {query: [] for query in FULL_SYNC_QUERIES}
+
+        self.sync.full_sync()
+
         self.assertEqual(self.ids(), [])
 
     def test_irrelevant_label_event_does_not_fetch(self):
@@ -294,6 +423,46 @@ class GmailSyncTests(unittest.TestCase):
         self.sync.sync()
         self.assertEqual(self.api.get_calls, [])
         self.assertEqual(self.store.checkpoint(), "91")
+
+    def test_legacy_retention_cache_full_syncs_once_then_uses_incremental(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "DELETE FROM metadata WHERE key='retention_version'"
+            )
+        self.api.listed_by_query = {
+            FULL_SYNC_QUERIES[0]: [],
+            FULL_SYNC_QUERIES[1]: ["calendar-40d"],
+        }
+        self.api.messages["calendar-40d"] = self._forty_day_calendar()
+        self.api.history["100"] = [history_page("101")]
+
+        self.sync.sync()
+
+        self.assertEqual(self.ids(), ["calendar-40d"])
+        self.assertEqual(self.store.retention_version(), "2")
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+
+        self.api.history["101"] = [history_page("102")]
+        self.sync.sync()
+
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+        self.assertEqual(self.api.history_calls[-1], "101")
+        self.assertEqual(self.store.checkpoint(), "102")
+
+    def test_unknown_retention_version_triggers_full_sync(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "UPDATE metadata SET value='1' WHERE key='retention_version'"
+            )
+        self.api.listed_by_query = {query: [] for query in FULL_SYNC_QUERIES}
+        self.api.history["100"] = [history_page("101")]
+
+        self.sync.sync()
+
+        self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
+        self.assertEqual(self.store.retention_version(), "2")
 
     def test_exact_cutoff_is_inclusive_and_prunes_older(self):
         self.api.listed = ["edge", "old"]

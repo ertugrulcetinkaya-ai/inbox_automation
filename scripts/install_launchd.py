@@ -26,7 +26,7 @@ TEMPLATES = {
 
 def render_template(
     template_path: Path,
-    mail_source="apple_mail",
+    mail_source="gmail",
     gmail_credentials_file=None,
     gmail_token_file=None,
     gmail_cache_file=None,
@@ -60,8 +60,8 @@ def main() -> int:
     parser.add_argument(
         "--mail-source",
         choices=("apple_mail", "gmail"),
-        default="apple_mail",
-        help="Mail transport to render (default is the conservative apple_mail local setting)",
+        default="gmail",
+        help="Mail transport to render (default: gmail)",
     )
     parser.add_argument("--gmail-credentials-file", type=Path)
     parser.add_argument("--gmail-token-file", type=Path)

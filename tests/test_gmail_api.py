@@ -51,7 +51,7 @@ class GmailApiTests(unittest.TestCase):
         with self.assertRaises(GmailHistoryExpired):
             api._execute(lambda: Request([http_error(404)]), not_found="history")
 
-    def test_message_list_uses_inbox_31day_superset_and_500_page_size(self):
+    def test_message_list_uses_caller_query_and_500_page_size(self):
         request = Mock()
         request.execute.return_value = {"messages": [{"id": "a"}]}
         messages_resource = Mock()
@@ -61,9 +61,10 @@ class GmailApiTests(unittest.TestCase):
         service = Mock()
         service.users.return_value = users
         api = GmailApi(service)
-        self.assertEqual(list(api.iter_message_ids()), ["a"])
+        query = "newer_than:367d filename:ics"
+        self.assertEqual(list(api.iter_message_ids(query)), ["a"])
         messages_resource.list.assert_called_once_with(
-            userId="me", labelIds=["INBOX"], q="newer_than:31d", maxResults=500
+            userId="me", labelIds=["INBOX"], q=query, maxResults=500
         )
 
 

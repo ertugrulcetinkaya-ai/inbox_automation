@@ -45,7 +45,7 @@ REMINDER_STATE_FILE = Path(
 REMINDER_MINUTES_DEFAULT = 15
 REMINDER_WINDOW_MINUTES_DEFAULT = 5
 ATTENTION_CONFIDENCE_THRESHOLD = 0.80
-MAIL_SOURCE_DEFAULT = "apple_mail"
+MAIL_SOURCE_DEFAULT = "gmail"
 GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
 GMAIL_DATA_DIR = Path.home() / ".hermes_local_automation" / "gmail"
 

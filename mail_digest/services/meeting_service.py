@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now
 from ..models import MeetingOccurrence
+from ..parsing.ics import recurrence_identity
 from ..parsing.meeting_parser import extract_meetings
 from ..utils import record_source_received_at
 
@@ -154,9 +155,7 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
     def event_key(meeting):
         uid = meeting.get("uid", "")
         recurrence_id = meeting.get("recurrence_id")
-        if isinstance(recurrence_id, (date, datetime)):
-            recurrence_id = recurrence_id.isoformat()
-        return uid, recurrence_id or ""
+        return uid, recurrence_identity(recurrence_id)
 
     def freshness_key(meeting):
         received_at = record_source_received_at(meeting)
@@ -192,6 +191,13 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
             latest_by_event[key] = meeting
 
     resolved = list(latest_by_event.values()) + without_uid
+    series_cancellations = [
+        meeting
+        for meeting in resolved
+        if meeting.get("uid")
+        and not meeting.get("recurrence_id")
+        and meeting.get("status") == "CANCELLED"
+    ]
     # Semantic mail has no authoritative UID. Correlate lifecycle messages in
     # a narrow order: Gmail thread ID first, then canonical sender email plus
     # subject family, always scoped to the affected occurrence date/time. A
@@ -211,6 +217,13 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
     for meeting in resolved:
         status = meeting.get("status", "CONFIRMED")
         if status == "CANCELLED":
+            continue
+        recurrence_id = meeting.get("recurrence_id")
+        if recurrence_id and any(
+            cancellation.get("uid") == meeting.get("uid")
+            and cancellation.get("sequence", 0) >= meeting.get("sequence", 0)
+            for cancellation in series_cancellations
+        ):
             continue
         identity = semantic_identity(meeting) if not meeting.get("uid") else None
         lifecycle_suppressed = any(
@@ -248,6 +261,33 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
     )
 
 
+def _recurring_sort_key(meeting):
+    return (
+        meeting.get("date") or date.max,
+        meeting.get("sort_minutes", 0),
+        meeting.get("subject", "").casefold(),
+    )
+
+
+def _collapse_recurring_occurrences(meetings):
+    """Keep the nearest upcoming occurrence for each UID-backed series."""
+
+    standalone = []
+    nearest_by_uid = {}
+    for meeting in meetings:
+        uid = meeting.get("uid")
+        if not uid or meeting.get("recurrence_id") is None:
+            standalone.append(meeting)
+            continue
+        current = nearest_by_uid.get(uid)
+        if current is None or _recurring_sort_key(meeting) < _recurring_sort_key(current):
+            nearest_by_uid[uid] = meeting
+    return sorted(
+        standalone + list(nearest_by_uid.values()),
+        key=_recurring_sort_key,
+    )
+
+
 def attention_reasons(meeting):
     reasons = []
     status = meeting.get("status", "CONFIRMED")
@@ -264,11 +304,17 @@ def _needs_attention(meeting):
     return bool(attention_reasons(meeting))
 
 
-def _render_meeting_lines(lines, meeting, remaining_minutes=None):
+def _render_meeting_lines(
+    lines,
+    meeting,
+    remaining_minutes=None,
+    show_recurring_label=False,
+):
     subject = meeting["subject"][:100]
     sender = meeting["sender"][:80]
     status_label = _status_label(meeting.get("status", "CONFIRMED"))
     status_suffix = f" [{status_label}]" if status_label else ""
+    recurring_suffix = " 🔁 Tekrarlayan" if show_recurring_label else ""
     warning_suffix = ""
     warnings = meeting.get("schedule_warnings", ())
     if warnings:
@@ -277,7 +323,8 @@ def _render_meeting_lines(lines, meeting, remaining_minutes=None):
     if remaining_minutes is not None:
         reminder_suffix = f" ({remaining_minutes} dk kaldı)"
     lines.append(
-        f"• {meeting['time']} — {subject}{status_suffix}{reminder_suffix}{warning_suffix}"
+        f"• {meeting['time']} — {subject}{recurring_suffix}{status_suffix}"
+        f"{reminder_suffix}{warning_suffix}"
     )
     lines.append(f"  Gönderen: {sender}")
     if meeting.get("location"):
@@ -289,7 +336,12 @@ def _render_meeting_lines(lines, meeting, remaining_minutes=None):
         lines.append(f"  Dikkat: {', '.join(reasons)}")
 
 
-def _render_grouped_meetings(lines, meetings, include_weekday=False):
+def _render_grouped_meetings(
+    lines,
+    meetings,
+    include_weekday=False,
+    show_recurring_label=False,
+):
     current_date = None
     for meeting in meetings:
         if meeting["date"] != current_date:
@@ -300,21 +352,47 @@ def _render_grouped_meetings(lines, meetings, include_weekday=False):
                 label = f"{TR_OUTPUT_WEEKDAYS[meeting['date'].weekday()]} — {label}"
             lines.append(label)
             current_date = meeting["date"]
-        _render_meeting_lines(lines, meeting)
+        _render_meeting_lines(
+            lines,
+            meeting,
+            show_recurring_label=(
+                show_recurring_label and meeting.get("recurrence_id") is not None
+            ),
+        )
 
 
-def _render_attention_section(lines, meetings, include_dates=False, include_weekday=False):
+def _render_attention_section(
+    lines,
+    meetings,
+    include_dates=False,
+    include_weekday=False,
+    collapse_recurrences=False,
+):
     attention = [meeting for meeting in meetings if _needs_attention(meeting)]
+    if collapse_recurrences:
+        attention = _collapse_recurring_occurrences(attention)
     if not attention:
         return
     if lines and lines[-1] != "":
         lines.append("")
     lines.extend(("⚠️ Dikkat gerektirenler", ""))
     if include_dates:
-        _render_grouped_meetings(lines, attention, include_weekday=include_weekday)
+        _render_grouped_meetings(
+            lines,
+            attention,
+            include_weekday=include_weekday,
+            show_recurring_label=collapse_recurrences,
+        )
     else:
         for meeting in attention:
-            _render_meeting_lines(lines, meeting)
+            _render_meeting_lines(
+                lines,
+                meeting,
+                show_recurring_label=(
+                    collapse_recurrences
+                    and meeting.get("recurrence_id") is not None
+                ),
+            )
             lines.append("")
 
 
@@ -341,13 +419,19 @@ def format_digest(records, target_date=None):
 
 
 def _render_upcoming_digest(meetings):
+    meetings = _collapse_recurring_occurrences(meetings)
     if not meetings:
         return "📅 Bugün ve sonraki toplantılar\nBugün veya sonrasında toplantı yok."
 
     lines = ["📅 Bugün ve sonraki toplantılar", ""]
     regular = [meeting for meeting in meetings if not _needs_attention(meeting)]
-    _render_grouped_meetings(lines, regular)
-    _render_attention_section(lines, meetings, include_dates=True)
+    _render_grouped_meetings(lines, regular, show_recurring_label=True)
+    _render_attention_section(
+        lines,
+        meetings,
+        include_dates=True,
+        collapse_recurrences=True,
+    )
     return "\n".join(lines).rstrip()
 
 
@@ -418,14 +502,14 @@ def format_weekly_digest(records, start_date=None, days=7):
 
 
 def _render_attention_digest(meetings):
-    attention = [
-        meeting for meeting in meetings if _needs_attention(meeting)
-    ]
+    attention = _collapse_recurring_occurrences(
+        [meeting for meeting in meetings if _needs_attention(meeting)]
+    )
     if not attention:
         return "⚠️ Dikkat gerektirenler\nBugün veya sonrasında dikkat gerektiren toplantı yok."
 
     lines = ["⚠️ Dikkat gerektirenler", ""]
-    _render_grouped_meetings(lines, attention)
+    _render_grouped_meetings(lines, attention, show_recurring_label=True)
     return "\n".join(lines).rstrip()
 
 
@@ -442,7 +526,9 @@ def build_digest_result(records, mode="daily", target_date=None, days=7):
         meetings = _collect_meetings(records, target_date, target_date)
         message = _render_digest(meetings, target_date)
     elif mode == "upcoming":
-        meetings = _collect_meetings(records, target_date)
+        meetings = _collapse_recurring_occurrences(
+            _collect_meetings(records, target_date)
+        )
         message = _render_upcoming_digest(meetings)
     elif mode == "weekly":
         end_date = target_date + timedelta(days=days - 1)
@@ -451,7 +537,13 @@ def build_digest_result(records, mode="daily", target_date=None, days=7):
         )
         message = _render_weekly_digest(meetings, target_date, end_date)
     elif mode == "attention":
-        meetings = _collect_meetings(records, target_date)
+        meetings = _collapse_recurring_occurrences(
+            [
+                meeting
+                for meeting in _collect_meetings(records, target_date)
+                if _needs_attention(meeting)
+            ]
+        )
         message = _render_attention_digest(meetings)
     else:
         raise ValueError(f"Unknown digest mode: {mode}")

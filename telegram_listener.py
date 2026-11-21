@@ -18,6 +18,7 @@ except ImportError:
 from mail_digest.cli import run_digest as execute_digest
 from mail_digest.config import PROJECT_ROOT, load_env
 from mail_digest.services.lock import DigestAlreadyRunning
+from mail_digest.services.health import build_status_report
 from mail_digest.services.log_rotation import LISTENER_LOG_NAMES, rotate_logs
 
 
@@ -328,11 +329,7 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
         _send_digest_command_response(token, chat_id, mode="attention")
     elif command in {"/durum", "/status"}:
         print("Command received: /durum")
-        send_message(
-            token,
-            chat_id,
-            "✅ Toplantı özeti listener'ı ve hatırlatma desteği çalışıyor.",
-        )
+        send_message(token, chat_id, build_status_report())
 
 
 def process_update(

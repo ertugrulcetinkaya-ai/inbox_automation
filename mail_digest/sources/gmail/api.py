@@ -67,13 +67,13 @@ class GmailApi:
             lambda: self.service.users().getProfile(userId="me")
         )
 
-    def iter_message_ids(self):
+    def iter_message_ids(self, query):
         page_token = None
         while True:
             kwargs = {
                 "userId": "me",
                 "labelIds": ["INBOX"],
-                "q": "newer_than:31d",
+                "q": query,
                 "maxResults": 500,
             }
             if page_token:

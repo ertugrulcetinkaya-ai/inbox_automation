@@ -66,7 +66,11 @@ except DigestAlreadyRunning:
     def test_cli_run_digest_uses_the_shared_lock(self, run):
         with tempfile.TemporaryDirectory() as directory:
             lock_path = Path(directory) / "digest.lock"
-            with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path):
+            status_path = Path(directory) / "status.json"
+            with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch.dict(
+                os.environ,
+                {"MAIL_DIGEST_STATUS_FILE": str(status_path)},
+            ):
                 self.assertEqual(run_digest(upcoming=True), 0)
 
         run.assert_called_once_with(upcoming=True, dry_run=False)

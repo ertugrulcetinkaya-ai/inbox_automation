@@ -11,7 +11,9 @@
 ## Mail and privacy rules
 
 - Read only the `ertugrul@cetinkayalar.com` account's primary Inbox.
-- Inspect at most the last 30 days of messages.
+- For Gmail, inspect ordinary messages from the last 30 days and retain calendar-payload (`raw_source`) messages for up to 366 days. Apple Mail rollback remains limited to 30 days.
+- Gmail cache retention version is 2. A missing or older/different version with a history checkpoint requires one full sync; the successful staging activation records version 2 atomically with the checkpoint.
+- `MAIL_SOURCE` defaults to `gmail`; use Apple Mail only when `MAIL_SOURCE=apple_mail` is explicitly set.
 - Never mark messages read or unread.
 - Never delete, move, archive, flag, reply, forward, label, or create drafts.
 - Never print Telegram bot tokens, credentials, full private message bodies, or other secrets in logs, tests, commits, or user-facing output.
@@ -25,13 +27,17 @@
 - Parse inline ICS and MIME `text/calendar`/`.ics` payloads before semantic text fallback. A neutral subject must not hide a valid calendar invitation.
 - Normalize lifecycle state to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; never list cancelled events, and never leave the old date of a rescheduled event active.
 - For repeated ICS events, resolve by `UID` and highest `SEQUENCE`; `METHOD:CANCEL` takes precedence at equal sequence.
+- Expand recurring ICS masters with `RRULE` and `RDATE` in the requested range, remove `EXDATE`, preserve event timezone/DST, and cap each series at 500 occurrences. Match instance updates by `UID + RECURRENCE-ID`; equal-or-higher sequence master cancellations suppress the series.
+- Normalize recurrence identities in one shared helper: aware datetimes use UTC ISO form, floating datetimes are interpreted in Europe/Istanbul then converted to UTC, and all-day dates use ISO date form.
 - Preserve ICS line folding and MIME source in the AppleScript/Python transport; never collapse calendar content into one whitespace-normalized line.
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.
+- In upcoming and attention output, show only the nearest future occurrence for each recurring UID and mark it `🔁 Tekrarlayan`; daily, weekly, and reminder modes keep every occurrence.
 - Preserve both Turkish-character and ASCII Telegram command aliases.
 - `telegram_listener.run_digest()` retains its success text contract for external callers; the listener's command path suppresses only that duplicate confirmation and sends failures or lock-contention responses.
 - Telegram messages are limited to 3,500 characters per part; split at line breaks when possible and hard-cut only a line longer than the limit.
 - CLI and listener entry points best-effort rotate only their own named launchd logs in `PROJECT_ROOT/logs` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
+- Every non-dry-run locked `run_digest()` records per-mode start, success, and failure timestamps in `~/.hermes_local_automation/mail_digest/status.json` (override with `MAIL_DIGEST_STATUS_FILE`); persist only exception class names. Dry-run digests leave status unchanged. `/durum`, `/status`, and `main.py --status` use a local-only health report, and `--status --dry-run` prints it without taking the digest lock.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
 
 ## Runtime ownership
