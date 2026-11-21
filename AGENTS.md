@@ -24,6 +24,7 @@
 ## Verification and changes
 
 - Add or update tests for every behavior change. Keep changes small and avoid unrelated working-tree edits.
+- Davranış ve operasyon değişiklikleri yalnızca README.md'de belgelenir; HERMES_PROJECT_MEMORY.md oluşturulmaz.
 - Run relevant tests, Python compilation, and `git diff --check` before each commit.
 - Before finishing a section, activate `.venv` and run `./scripts/check.sh`; do not rely on GitHub Actions for local verification.
 - Preserve the 100-message synthetic parser performance regression test and the bounded dotted-number context scan.
