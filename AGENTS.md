@@ -60,6 +60,7 @@
 - Prefer small, explicit patches and keep unrelated working-tree changes untouched.
 - Dotted numeric date/time context checks must scan only the token's nearby window so parser cost does not grow with the full message length per token; preserve parser results and keep the 100-message synthetic performance regression test.
 - Run `./scripts/check.sh` locally for compile, unit, lint, type, and whitespace checks; set `PYTHON` to override its interpreter. It runs Bandit only when installed and explains how to activate the venv when Ruff or Pyright is missing. Run `./scripts/check.sh --audit` only for an explicitly requested dependency audit. GitHub Actions is manually triggered with `workflow_dispatch`.
+- `python scripts/bench_parser.py --cache` compares uncached, cold-cache, and warm-cache timings on synthetic records using a temporary parse-cache database.
 - Digest logs may include message counts and source names, but must omit the mailbox address and message content.
 - Add or update tests for parser, command, routing, or deployment changes.
 - Keep parser coverage broad: maintain table-driven date/time/weekday/lifecycle cases, sanitized fixtures under `tests/fixtures/`, duplicate/update regressions, and Mail/Telegram failure-path tests. Fixtures must not contain real personal data or credentials.

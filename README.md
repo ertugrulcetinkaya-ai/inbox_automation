@@ -208,7 +208,7 @@ Betik `PYTHON` değişkeniyle farklı bir Python yorumlayıcısı alabilir ve `r
 
 Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixture'ları ve dış sistem hata akışlarını içerir. `tests/fixtures/` altında kişisel veri içermeyen 20 örnek bulunur; AppleScript timeout/bozuk çıktı, Telegram HTTP veya `ok:false` cevabı, 10.30/09.30/14.30 saatleri, tarih biçimleri, yıl geçişi, hafta günleri, quoted reply, iptal, erteleme ve çoklu tarih senaryoları test edilir.
 
-Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular; `python scripts/bench_parser.py` daily, weekly, upcoming ve reminder parser sürelerini ölçer.
+Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular. `python scripts/bench_parser.py --cache` daily, weekly, upcoming ve reminder sürelerini önbelleksiz, soğuk ve sıcak önbellek koşullarında ölçer; yalnızca geçici cache dosyaları kullanır.
 
 Ayrıştırma çıktısını etkileyen her değişiklikte `mail_digest/parsing/__init__.py` içindeki `PARSER_VERSION` artırılır; böylece eski parse-cache kayıtları kullanılmaz. Cache girdileri her çalışmada, başlangıç aralığı bugünden iki günden daha eski olanlar için temizlenir.
 
