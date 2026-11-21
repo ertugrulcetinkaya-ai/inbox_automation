@@ -154,13 +154,13 @@ def run_digest(upcoming=False, mode=None):
     if exit_code != 0:
         return f"Özet çalıştırılamadı (çıkış kodu: {exit_code})."
 
-    if mode == "weekly":
-        return "Haftalık toplantı özeti Telegram sohbetinize gönderildi."
-    if mode == "attention":
-        return "Dikkat gerektiren toplantılar Telegram sohbetinize gönderildi."
-    if upcoming:
-        return "Bugün ve sonraki toplantı özeti Telegram sohbetinize gönderildi."
-    return "Bugünün toplantı özeti Telegram sohbetinize gönderildi."
+    return None
+
+
+def _send_digest_command_response(token, chat_id, **kwargs):
+    response = run_digest(**kwargs)
+    if response:
+        send_message(token, chat_id, response)
 
 
 class TelegramUpdateStateError(RuntimeError):
@@ -295,7 +295,7 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
     command = (text or "").strip().lower()
     if command in {"/toplantilar", "/toplantılar", "/bugun", "/bugün", "/mail", "/unread"}:
         print("Command received: /toplantilar or /bugun")
-        send_message(token, chat_id, run_digest())
+        _send_digest_command_response(token, chat_id)
     elif command in {
         "/gelecek_toplantilar",
         "/gelecek_toplantılar",
@@ -305,13 +305,13 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
         "/sonraki_toplantılar",
     }:
         print("Command received: /gelecek_toplantilar")
-        send_message(token, chat_id, run_digest(upcoming=True))
+        _send_digest_command_response(token, chat_id, upcoming=True)
     elif command in {"/hafta", "/haftalik", "/haftalık", "/week"}:
         print("Command received: /hafta")
-        send_message(token, chat_id, run_digest(mode="weekly"))
+        _send_digest_command_response(token, chat_id, mode="weekly")
     elif command in {"/dikkat", "/attention"}:
         print("Command received: /dikkat")
-        send_message(token, chat_id, run_digest(mode="attention"))
+        _send_digest_command_response(token, chat_id, mode="attention")
     elif command in {"/durum", "/status"}:
         print("Command received: /durum")
         send_message(

@@ -332,6 +332,50 @@ class TelegramListenerDeliveryFailureTests(unittest.TestCase):
 
 
 class TelegramUpdateStateTests(unittest.TestCase):
+    def test_successful_digest_command_does_not_send_a_second_message(self):
+        update = {
+            "update_id": 45,
+            "message": {"chat": {"id": "fixture-chat"}, "text": "/bugun"},
+        }
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener.run_digest", return_value=None
+        ) as run_digest, patch("telegram_listener.send_message") as send:
+            self.assertTrue(
+                process_update(
+                    update,
+                    "fixture-token",
+                    "fixture-chat",
+                    processed_update_ids=set(),
+                    state_file=Path(directory) / "update_state.json",
+                )
+            )
+
+        run_digest.assert_called_once_with()
+        send.assert_not_called()
+
+    def test_digest_in_progress_message_is_still_sent(self):
+        update = {
+            "update_id": 46,
+            "message": {"chat": {"id": "fixture-chat"}, "text": "/bugun"},
+        }
+        response = "Özet şu anda hazırlanıyor. Lütfen biraz sonra tekrar deneyin."
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener.run_digest", return_value=response
+        ), patch("telegram_listener.send_message") as send:
+            self.assertTrue(
+                process_update(
+                    update,
+                    "fixture-token",
+                    "fixture-chat",
+                    processed_update_ids=set(),
+                    state_file=Path(directory) / "update_state.json",
+                )
+            )
+
+        send.assert_called_once_with("fixture-token", "fixture-chat", response)
+
     def test_update_is_dispatched_once_and_persisted(self):
         update = {
             "update_id": 42,

@@ -32,6 +32,8 @@ Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan k
 | Dikkat gerektiren toplantılar | `/dikkat` | `/attention` |
 | Servis durumu | `/durum` | `/status` |
 
+Komutla özet başarıyla gönderildiğinde listener ikinci bir onay mesajı göndermez. Hata ve özetin hâlihazırda hazırlanmakta olduğunu bildiren yanıtlar kullanıcıya iletilir.
+
 İleri tarihli listeyi yerel olarak kontrol etmek için:
 
 ```bash

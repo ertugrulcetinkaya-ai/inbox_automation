@@ -95,10 +95,10 @@ except DigestAlreadyRunning:
 
 class TelegramListenerLockIntegrationTests(unittest.TestCase):
     @patch("telegram_listener.execute_digest", return_value=0)
-    def test_listener_uses_the_shared_cli_service(self, execute):
+    def test_listener_uses_the_shared_cli_service_without_success_confirmation(self, execute):
         from telegram_listener import run_digest as listener_run_digest
 
-        self.assertIn("gönderildi", listener_run_digest())
+        self.assertIsNone(listener_run_digest())
         execute.assert_called_once_with(upcoming=False)
 
     @patch("telegram_listener.execute_digest", side_effect=DigestAlreadyRunning)
@@ -112,11 +112,11 @@ class TelegramListenerLockIntegrationTests(unittest.TestCase):
     def test_listener_routes_weekly_and_attention_modes_through_shared_service(self, execute):
         from telegram_listener import run_digest as listener_run_digest
 
-        self.assertIn("Haftalık", listener_run_digest(mode="weekly"))
+        self.assertIsNone(listener_run_digest(mode="weekly"))
         execute.assert_called_once_with(mode="weekly")
 
         execute.reset_mock()
-        self.assertIn("Dikkat", listener_run_digest(mode="attention"))
+        self.assertIsNone(listener_run_digest(mode="attention"))
         execute.assert_called_once_with(mode="attention")
 
 

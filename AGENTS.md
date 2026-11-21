@@ -29,6 +29,7 @@
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.
 - Preserve both Turkish-character and ASCII Telegram command aliases.
+- When a listener digest command succeeds, do not send an extra confirmation after the digest; continue sending error and already-running responses.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
 
 ## Runtime ownership
