@@ -1,68 +1,35 @@
-# Inbox Automation Project Rules
+# Agent Instructions
 
-## Scope
+## Scope and layers
 
-- This repository is the `inbox_automation` project.
-- Read `README.md` and `HERMES_PROJECT_MEMORY.md` before changing automation, Mail access, Telegram routing, or deployment behavior.
-- Keep the project machine-independent. Resolve paths from `__file__` or explicit environment variables; do not hard-code a developer's home directory into application logic.
-- Keep `main.py` as a thin compatibility facade. Put new code in the appropriate `mail_digest` layer: Mail access under `sources`, parsing under `parsing`, aggregation/rendering under `services`, Telegram transport under `delivery`, and process orchestration under `cli`.
-- Keep parser modules independent from Telegram delivery; parser tests must not require network access or Telegram credentials.
+- Read the relevant sections of [README.md](README.md) before changing parsing, Mail access, Telegram routing, operations, or deployment behavior. README is the canonical product and operations reference.
+- Keep paths machine-independent. Resolve them from `__file__` or explicit environment variables; never hard-code a developer's home directory in application logic.
+- Preserve the project layers: Mail access in `sources/`, parsing in `parsing/`, business rules and rendering in `services/`, Telegram transport in `delivery/`, and process flow in `cli.py`. Keep `main.py` as a thin compatibility entry point.
+- Keep parsing independent from Telegram delivery. Parser tests must run without network access or credentials.
 
-## Mail and privacy rules
+## Read-only and privacy rules
 
-- Read only the `ertugrul@cetinkayalar.com` account's primary Inbox.
-- For Gmail, inspect ordinary messages from the last 30 days and retain calendar-payload (`raw_source`) messages for up to 366 days. Apple Mail rollback remains limited to 30 days.
-- Gmail cache retention version is 2. A missing or older/different version with a history checkpoint requires one full sync; the successful staging activation records version 2 atomically with the checkpoint.
-- Gmail history requests use only `messageAdded`, `messageDeleted`, `labelAdded`, and `labelRemoved` event types without a label filter. Skip uncached additions that are not in INBOX, apply message deletions directly to the local cache without fetching them, and preserve the final operation when history contains repeated changes to one ID.
-- Gmail full sync fetches snapshot messages in groups of 50. Per-message 404 results are treated as missing messages; transient 429, 5xx, and rate-limit responses are retried individually through the normal bounded backoff path.
-- `MAIL_SOURCE` defaults to `gmail`; use Apple Mail only when `MAIL_SOURCE=apple_mail` is explicitly set.
-- Never mark messages read or unread.
-- Never delete, move, archive, flag, reply, forward, label, or create drafts.
-- Never print Telegram bot tokens, credentials, full private message bodies, or other secrets in logs, tests, commits, or user-facing output.
+- Mail access is strictly read-only. Never change read status, delete, move, archive, flag, label, reply, forward, send mail, or create drafts.
+- Never put tokens, credentials, private message bodies, mailbox contents, or real personal data in logs, tests, fixtures, commits, or user-facing output.
+- Tests and fixtures must be synthetic and must not require a network connection or real credentials.
 
-## Meeting behavior
+## Parser cache version
 
-- Preserve the received-date context when interpreting relative phrases such as `bugün` and `yarın`.
-- Resolve bare weekdays to the next occurrence from the received date; support `bu/this` and `önümüzdeki/next` prefixes, with the latter requiring a strictly future occurrence when the message arrives on that weekday.
-- Resolve yearless dates in the target year first; if the candidate is at least 60 days in the past, evaluate the same month/day in the following year. This prevents `5 Ocak` on 20 December from becoming a past event while keeping recent past dates in the current year.
-- Classify dotted numeric tokens before extracting dates or times: `HH.MM` must not also become `DD.MM`; ambiguous `DD.MM` values require date context, while explicit-year and structurally day-first values remain dates.
-- Parse inline ICS and MIME `text/calendar`/`.ics` payloads before semantic text fallback. A neutral subject must not hide a valid calendar invitation.
-- Normalize lifecycle state to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; never list cancelled events, and never leave the old date of a rescheduled event active.
-- For repeated ICS events, resolve by `UID` and highest `SEQUENCE`; `METHOD:CANCEL` takes precedence at equal sequence.
-- Expand recurring ICS masters with `RRULE` and `RDATE` in the requested range, remove `EXDATE`, preserve event timezone/DST, and cap each series at 500 occurrences. Match instance updates by `UID + RECURRENCE-ID`; equal-or-higher sequence master cancellations suppress the series.
-- Normalize recurrence identities in one shared helper: aware datetimes use UTC ISO form, floating datetimes are interpreted in Europe/Istanbul then converted to UTC, and all-day dates use ISO date form.
-- Preserve ICS line folding and MIME source in the AppleScript/Python transport; never collapse calendar content into one whitespace-normalized line.
-- Keep daily output limited to meetings scheduled for the current day.
-- Keep upcoming output inclusive of today and later parsed meetings.
-- In upcoming and attention output, show only the nearest future occurrence for each recurring UID and mark it `🔁 Tekrarlayan`; daily, weekly, and reminder modes keep every occurrence.
-- Preserve both Turkish-character and ASCII Telegram command aliases.
-- `telegram_listener.run_digest()` retains its success text contract for external callers; the listener's command path suppresses only that duplicate confirmation and sends failures or lock-contention responses.
-- Telegram messages are limited to 3,500 characters per part; split at line breaks when possible and hard-cut only a line longer than the limit.
-- CLI and listener entry points best-effort rotate only their own named launchd logs in `PROJECT_ROOT/logs` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
-- Every non-dry-run locked `run_digest()` records per-mode start, success, and failure timestamps in `~/.hermes_local_automation/mail_digest/status.json` (override with `MAIL_DIGEST_STATUS_FILE`); persist only exception class names. Dry-run digests leave status unchanged. `/durum`, `/status`, and `main.py --status` use a local-only health report, and `--status --dry-run` prints it without taking the digest lock.
-- Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
-- Increment `mail_digest/parsing.PARSER_VERSION` whenever a change can alter parser output; this invalidates persisted parse-cache entries.
-- The persistent meeting parse cache belongs to `services/`, uses a SHA-256 key over parser version, parser inputs, and date range, and stores JSON with typed date/time values. Keep its file at `0600` and its cache directory at `0700`; `MAIL_DIGEST_PARSE_CACHE_FILE` may override the default location. Cache failures must warn once and fall back to ordinary parsing without failing the digest.
+- Increase `mail_digest/parsing.PARSER_VERSION` whenever a change can alter parser output, so persisted parse-cache entries are invalidated.
+- Keep parser cache storage and its error behavior in `services/`; consult the README's cache documentation before changing its contract.
+
+## Verification and changes
+
+- Add or update tests for every behavior change. Keep changes small and avoid unrelated working-tree edits.
+- Run relevant tests, Python compilation, and `git diff --check` before each commit.
+- Before finishing a section, activate `.venv` and run `./scripts/check.sh`; do not rely on GitHub Actions for local verification.
+- Preserve the 100-message synthetic parser performance regression test and the bounded dotted-number context scan.
+- Follow the README's [Test](README.md#test) instructions. Do not run dependency audits unless explicitly requested.
 
 ## Runtime ownership
 
-- GitHub `main` is the canonical source.
-- Mac Studio and MacBook Pro are development machines.
-- Mac Mini is the only production/runtime machine.
-- When Hermes owns the Telegram bot, do not start the standalone listener; there must be only one Telegram polling/dispatch owner.
-- Keep existing launchd labels stable unless a migration plan explicitly covers unload, disable, install, and verification.
-- Every digest entry point must call the shared `mail_digest.cli.run_digest()` service. It owns the `/tmp/mail_unread_digest.lock` `fcntl.flock()` lock, so launchd and Telegram commands cannot run overlapping digests; never reintroduce `exists()`/`touch()` lock checks or unlink the lock file.
-- `digest_lock()` and `run_digest()` default to immediate lock contention handling (`wait_seconds=0`) for launchd and CLI work. The standalone Telegram listener may pass `wait_seconds=30`; lock retries use 0.5-second non-blocking intervals, and the lock file is never removed.
-- Deploy the integrated runtime through `company_reporting_hub/scripts/deploy_mac_mini.sh` after both repositories are pushed.
-
-## Change and verification rules
-
-- Prefer small, explicit patches and keep unrelated working-tree changes untouched.
-- Dotted numeric date/time context checks must scan only the token's nearby window so parser cost does not grow with the full message length per token; preserve parser results and keep the 100-message synthetic performance regression test.
-- Run `./scripts/check.sh` locally for compile, unit, lint, type, and whitespace checks; set `PYTHON` to override its interpreter. It runs Bandit only when installed and explains how to activate the venv when Ruff or Pyright is missing. Run `./scripts/check.sh --audit` only for an explicitly requested dependency audit. GitHub Actions is manually triggered with `workflow_dispatch`.
-- `python scripts/bench_parser.py --cache` compares uncached, cold-cache, and warm-cache timings on synthetic records using a temporary parse-cache database.
-- Digest logs may include message counts and source names, but must omit the mailbox address and message content.
-- Add or update tests for parser, command, routing, or deployment changes.
-- Keep parser coverage broad: maintain table-driven date/time/weekday/lifecycle cases, sanitized fixtures under `tests/fixtures/`, duplicate/update regressions, and Mail/Telegram failure-path tests. Fixtures must not contain real personal data or credentials.
-- Run the relevant unit tests, Python compilation, and `git diff --check` before committing.
-- After deployment, verify the Hermes gateway is running, both checkouts are clean and on `main`, and the installed bridge contains the current command set.
+- GitHub `main` is canonical. Mac Studio and MacBook Pro are development machines; Mac Mini is the production/runtime machine.
+- The standalone `telegram_listener.py` is the sole Telegram polling owner. Do not start a second poller or webhook for the same bot.
+- Route digest entry points through the shared `mail_digest.cli.run_digest()` service and its process-level lock; do not recreate lock-file existence checks or remove the lock file.
+- Do not load, restart, or remove launchd services, deploy, or access the Mac Mini unless the user explicitly requests that action. The deploy script's default mode is preview only; never add an implicit apply step.
+- See README's [Çalıştırma modeli](README.md#çalıştırma-modeli) for operational details.
