@@ -31,6 +31,7 @@
 - Preserve both Turkish-character and ASCII Telegram command aliases.
 - When a listener digest command succeeds, do not send an extra confirmation after the digest; continue sending error and already-running responses.
 - Telegram messages are limited to 3,500 characters per part; split at line breaks when possible and hard-cut only a line longer than the limit.
+- CLI and listener entry points best-effort rotate `PROJECT_ROOT/logs/*.log` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
 
 ## Runtime ownership

@@ -58,6 +58,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - SECURITY: Do not print or expose the Telegram bot token.
 - `mail_digest/cli.py`: Sends the daily meeting digest; `main.py` delegates to it for launchd compatibility.
 - `mail_digest/services/lock.py`: Owns the shared non-blocking `fcntl.flock()` lock at `/tmp/mail_unread_digest.lock`; both launchd and Telegram command execution must use `mail_digest.cli.run_digest()`.
+- `mail_digest/services/log_rotation.py`: CLI and standalone listener startup best-effort rotate `PROJECT_ROOT/logs/*.log` files larger than 5 MiB, retaining at most three numbered archives and swallowing rotation errors.
 - `telegram_listener.py`: Standalone listener for `/toplantilar`/`/toplantılar`, `/bugun`/`/bugün`, `/gelecek_toplantilar`/`/gelecek_toplantılar`, `/toplantilar_gelecek`/`/toplantılar_gelecek`, `/sonraki_toplantilar`/`/sonraki_toplantılar`, `/hafta`/`/haftalik`/`/haftalık`/`/week`, `/dikkat`/`/attention`, and `/durum`; ASCII aliases remain supported. Group/supergroup chats require `TELEGRAM_ALLOWED_USER_ID`; private chats retain their existing behavior. Optional Company Reporting commands use an installed adapter rather than runtime `sys.path` injection. Do not run it when Company Reporting/Hermes owns the same Telegram bot.
 - A successful listener digest command does not send a second confirmation after the digest. Error and lock-contention responses are still sent.
 - Telegram delivery caps each message at 3,500 characters, preferring line breaks and hard-cutting only oversized individual lines; concatenating chunks must preserve the original text.
@@ -67,6 +68,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - `scripts/install_launchd.py`: Renders templates using the current checkout and user paths.
 - The summary agent runs daily at 08:00. The standalone listener is optional and must not share a Telegram bot with Hermes Gateway.
 - The reminder agent runs every five minutes and calls `main.py --reminder`; `MEETING_REMINDER_MINUTES` defaults to 15 and `MEETING_REMINDER_WINDOW_MINUTES` defaults to 5.
+- The standalone listener launchd template uses `ThrottleInterval=30`; keep its label stable and do not load/restart it as part of code changes.
 - The 08:00 launchd invocation, reminder invocation, and Telegram commands share the same `run_digest()` lock. Do not use `exists()`/`touch()` checks or unlink the lock file; `flock` releases automatically after normal exit, exceptions, and process termination.
 - `logs/`: Contains output and error logs.
 

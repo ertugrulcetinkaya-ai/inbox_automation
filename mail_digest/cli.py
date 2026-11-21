@@ -2,7 +2,14 @@
 
 import argparse
 
-from .config import TARGET_EMAIL, local_now, log, reminder_minutes, reminder_window_minutes
+from .config import (
+    PROJECT_ROOT,
+    TARGET_EMAIL,
+    local_now,
+    log,
+    reminder_minutes,
+    reminder_window_minutes,
+)
 from .delivery.telegram import send_telegram
 from .services.meeting_service import (
     build_digest_result,
@@ -10,6 +17,7 @@ from .services.meeting_service import (
     format_reminder_digest,
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
+from .services.log_rotation import rotate_logs
 from .services.reminder_state import (
     load_last_successful_reminder_scan,
     load_sent_reminders,
@@ -133,6 +141,7 @@ def run_digest(upcoming=False, dry_run=False, mode=None):
 
 
 def main():
+    rotate_logs(PROJECT_ROOT / "logs")
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fetch and format but do not send")
     output_group = parser.add_mutually_exclusive_group()
