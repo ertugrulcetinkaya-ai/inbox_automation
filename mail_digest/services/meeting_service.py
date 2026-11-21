@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import re
-import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from email.utils import parseaddr
 from typing import cast
 from zoneinfo import ZoneInfo
 
-from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now
+from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now, log
 from ..models import MeetingOccurrence
 from ..parsing.ics import recurrence_identity
 from ..parsing.meeting_parser import extract_meetings
@@ -87,9 +86,7 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
                 parsed_records.append(result)
             cache.store(start_date, pending)
     except ParseCacheUnavailable:
-        logging.getLogger(__name__).warning(
-            "Meeting parse cache unavailable; parsing without cache"
-        )
+        log("Meeting parse cache unavailable; parsing without cache")
         parsed_records = parse_uncached()
 
     meetings = [meeting for parsed in parsed_records for meeting in parsed]

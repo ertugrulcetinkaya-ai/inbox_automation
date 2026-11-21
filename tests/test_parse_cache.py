@@ -7,7 +7,9 @@ import sqlite3
 import stat
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import date, datetime, timedelta
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -161,28 +163,38 @@ class ParseCacheTests(unittest.TestCase):
 
     def test_corrupt_cache_falls_back_to_normal_parsing(self):
         self.cache_path.write_bytes(b"not a sqlite database")
+        output = StringIO()
 
-        with self.assertLogs("mail_digest.services.meeting_service", level="WARNING"):
+        with redirect_stdout(output):
             result = build_digest_result(
                 [cache_records()[-1]], "daily", target_date=date(2026, 11, 23)
             )
 
         self.assertEqual(result.count, 1)
+        self.assertIn(
+            "Meeting parse cache unavailable; parsing without cache",
+            output.getvalue(),
+        )
 
     def test_unreadable_cache_falls_back_to_normal_parsing(self):
+        output = StringIO()
         with (
             patch.object(
                 parse_cache.sqlite3,
                 "connect",
                 side_effect=sqlite3.OperationalError("unavailable"),
             ),
-            self.assertLogs("mail_digest.services.meeting_service", level="WARNING"),
+            redirect_stdout(output),
         ):
             result = build_digest_result(
                 [cache_records()[-1]], "daily", target_date=date(2026, 11, 23)
             )
 
         self.assertEqual(result.count, 1)
+        self.assertIn(
+            "Meeting parse cache unavailable; parsing without cache",
+            output.getvalue(),
+        )
 
     def test_old_range_entries_are_removed_on_each_pass(self):
         today = local_now().date()
