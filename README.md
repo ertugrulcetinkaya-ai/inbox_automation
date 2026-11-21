@@ -264,6 +264,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Hatırlatma taraması `(son başarılı tarama, şimdi + lead time]` aralığını yakalar; ilk taramada küçük bir kurtarma örtüşmesi kullanılır. State cursor'ı yalnızca tarama ve gönderim başarılı olunca ilerler.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
 - Mac Mini için bu depodaki `scripts/deploy_mac_mini.sh` kullanılır. Varsayılanı kontrol ve önizleme yapar; summary, reminder ve listener plist'lerini yazma ile launchd `bootout`/`bootstrap` işlemleri yalnızca `--apply` verildiğinde yapılır. `--apply` bu kod değişikliği sırasında çalıştırılmaz.
+- Deploy ön kontrolü `.venv/bin/python` ve `python -m pip` işleyişini doğrular; bozuk venv için elle yeniden oluşturma komutunu bildirir ve venv'i otomatik değiştirmez. `ruff` ve `pyright`, yalnızca kendi `--version` kontrolleri başarılıysa kullanılır.
 - Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz.
 
 ## Test

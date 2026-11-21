@@ -44,7 +44,6 @@ git pull --ff-only origin main
 
 VENV_DIR="$PROJECT_ROOT/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
-VENV_PIP="$VENV_DIR/bin/pip"
 if [[ ! -d "$VENV_DIR" ]]; then
     PYTHON3_BIN=''
     for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
@@ -64,14 +63,18 @@ if [[ ! -d "$VENV_DIR" ]]; then
     "$PYTHON3_BIN" -m venv "$VENV_DIR"
 fi
 
-if [[ ! -x "$VENV_PYTHON" || ! -x "$VENV_PIP" ]]; then
-    printf '.venv must contain executable bin/python and bin/pip.\n' >&2
+if ! "$VENV_PYTHON" -c 'import sys' >/dev/null 2>&1 \
+    || ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
+    printf '.venv bozuk; yeniden oluşturun: mv .venv .venv.broken-%s && python3.11 -m venv .venv\n' \
+        "$(date +%Y%m%d)" >&2
     exit 1
 fi
 
-"$VENV_PIP" install -r requirements.lock
+"$VENV_PYTHON" -m pip install -r requirements.lock
 
-if [[ -x "$VENV_DIR/bin/ruff" && -x "$VENV_DIR/bin/pyright" ]]; then
+if [[ -x "$VENV_DIR/bin/ruff" && -x "$VENV_DIR/bin/pyright" ]] \
+    && "$VENV_DIR/bin/ruff" --version >/dev/null 2>&1 \
+    && "$VENV_DIR/bin/pyright" --version >/dev/null 2>&1; then
     PATH="$VENV_DIR/bin:$PATH" PYTHON="$VENV_PYTHON" ./scripts/check.sh
 else
     printf 'ruff or pyright is missing from .venv; running unittest and compileall only.\n'
