@@ -79,6 +79,11 @@ else
     "$VENV_PYTHON" -m compileall -q main.py telegram_listener.py mail_digest tests scripts
 fi
 
+if ! MAIL_SOURCE=gmail "$VENV_PYTHON" main.py --upcoming --dry-run >/dev/null 2>&1; then
+    printf 'Gmail ön kontrolü başarısız; önce .venv/bin/python scripts/gmail_auth.py çalıştırın.\n' >&2
+    exit 1
+fi
+
 if ! LAUNCHD_JOBS="$(launchctl list)"; then
     printf 'Unable to inspect launchd jobs; refusing deployment.\n' >&2
     exit 1

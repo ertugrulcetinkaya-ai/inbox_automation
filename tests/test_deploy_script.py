@@ -13,7 +13,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeployScriptTests(unittest.TestCase):
-    def run_deploy(self, *, dirty=False, branch="main", launchd_output="", apply=False):
+    def run_deploy(
+        self,
+        *,
+        dirty=False,
+        branch="main",
+        launchd_output="",
+        apply=False,
+        preflight_ok=True,
+    ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         temp_root = Path(temporary.name)
@@ -60,6 +68,7 @@ class DeployScriptTests(unittest.TestCase):
         fake_python.write_text(
             "#!/usr/bin/env bash\n"
             "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_PYTHON_LOG\"\n"
+            "if [[ \"$*\" == 'main.py --upcoming --dry-run' && \"$DEPLOY_TEST_PREFLIGHT_FAIL\" == true ]]; then exit 1; fi\n"
             "exit 0\n",
             encoding="utf-8",
         )
@@ -84,6 +93,7 @@ class DeployScriptTests(unittest.TestCase):
                 "DEPLOY_TEST_BRANCH": branch,
                 "DEPLOY_TEST_DIRTY": "true" if dirty else "false",
                 "DEPLOY_TEST_LAUNCHD": launchd_output,
+                "DEPLOY_TEST_PREFLIGHT_FAIL": "false" if preflight_ok else "true",
                 "DEPLOY_TEST_GIT_LOG": str(git_log),
                 "DEPLOY_TEST_LAUNCHCTL_LOG": str(launchctl_log),
                 "DEPLOY_TEST_PYTHON_LOG": str(python_log),
@@ -128,6 +138,19 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("--include-listener", install_call)
         self.assertNotIn("--install", install_call)
         self.assertIn("main.py --status --dry-run", calls)
+
+    def test_gmail_preflight_failure_stops_before_plist_or_launchctl(self):
+        result, launchctl_log, python_log = self.run_deploy(preflight_ok=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Gmail ön kontrolü başarısız; önce .venv/bin/python scripts/gmail_auth.py çalıştırın.",
+            result.stderr,
+        )
+        calls = python_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("main.py --upcoming --dry-run", calls)
+        self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))
+        self.assertFalse(launchctl_log.exists())
 
 
 if __name__ == "__main__":
