@@ -1,11 +1,12 @@
 # Project Memory: Inbox Automation
 
 ## Overview
-This is a standalone inbox automation project. The official read-only Gmail API is the production transport; macOS Mail is retained only as a rollback transport. Production launchd jobs must set `MAIL_SOURCE=gmail`; the application keeps `apple_mail` as its conservative local default when the variable is unset. Hermes must read this file first before doing any work in this project.
+This is a standalone inbox automation project. The official read-only Gmail API is the production transport and application default; macOS Mail is retained only as a rollback transport selected explicitly with `MAIL_SOURCE=apple_mail`. Hermes must read this file first before doing any work in this project.
 
 ## Core Functionality
 - The production project reads recent messages from Gmail; Apple Mail / macOS Mail remains the rollback adapter.
 - `MAIL_SOURCE=gmail` selects the read-only Gmail API and `MAIL_SOURCE=apple_mail` selects the rollback adapter. There is no automatic fallback between them.
+- `gmail` is the application and launchd-renderer default; Apple Mail is selected only by explicitly setting `MAIL_SOURCE=apple_mail` or passing `--mail-source apple_mail` to the plist renderer.
 - Gmail uses only `https://www.googleapis.com/auth/gmail.readonly`; normal digest execution never starts interactive OAuth. `scripts/gmail_auth.py` is the explicit one-time authorization path.
 - Gmail maintains a normalized SQLite cache under `~/.hermes_local_automation/gmail/` by default. Full sync uses a pre-snapshot history boundary, staging, history reconciliation, and atomic cache/checkpoint activation; later runs use exact Gmail history change arrays and current-message state.
 - SCOPE: Only the account configured with `ertugrul@cetinkayalar.com` is included.

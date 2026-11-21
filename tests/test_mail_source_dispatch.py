@@ -32,8 +32,16 @@ class MailSourceDispatchTests(unittest.TestCase):
         apple.assert_not_called()
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_migration_default_remains_apple_mail(self):
-        self.assertEqual(selected_source_name(), "apple_mail")
+    def test_default_source_is_gmail(self):
+        self.assertEqual(selected_source_name(), "gmail")
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("mail_digest.sources.gmail.fetch_mail", return_value=[{"source": "gmail"}])
+    @patch("mail_digest.sources.apple_mail.fetch_mail")
+    def test_unset_source_uses_gmail_without_apple_mail_fallback(self, apple, gmail):
+        self.assertEqual(fetch_mail(), [{"source": "gmail"}])
+        gmail.assert_called_once_with()
+        apple.assert_not_called()
 
     @patch.dict(os.environ, {"MAIL_SOURCE": "unknown"})
     def test_unknown_source_fails_clearly(self):
@@ -52,13 +60,18 @@ class GmailReadOnlyArchitectureTests(unittest.TestCase):
         for scope in ("gmail.modify", "gmail.compose", "mail.google.com", "gmail.send", "gmail.labels"):
             self.assertNotIn(scope, combined)
 
-    def test_launchd_renderer_defaults_to_apple_and_supports_gmail_paths(self):
+    def test_launchd_renderer_defaults_to_gmail_and_supports_gmail_paths(self):
         from scripts.install_launchd import TEMPLATES, render_template
 
         rendered = render_template(TEMPLATES["summary"]).decode()
-        self.assertIn("<string>apple_mail</string>", rendered)
+        self.assertIn("<string>gmail</string>", rendered)
         self.assertIn("GMAIL_CREDENTIALS_FILE", rendered)
         self.assertNotIn("__GMAIL_", rendered)
+
+        apple_rendered = render_template(
+            TEMPLATES["summary"], mail_source="apple_mail"
+        ).decode()
+        self.assertIn("<string>apple_mail</string>", apple_rendered)
 
         reminder = render_template(TEMPLATES["reminder"], reminder_minutes=30).decode()
         self.assertIn("<string>--reminder</string>", reminder)
