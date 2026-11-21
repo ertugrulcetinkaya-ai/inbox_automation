@@ -76,4 +76,4 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 ## Operational Rules
 - Any change to automation, launchd, Telegram, or Mail access requires explicit APPLY.
 - Prefer read-only tests before installing or restarting launchd services.
-- Run `./scripts/check.sh` locally for compile, unit, Ruff, Pyright, and diff checks; Bandit is conditional on installation. `pip-audit` runs only via `./scripts/check.sh --audit`. GitHub Actions uses only manual `workflow_dispatch`, not push or pull-request triggers.
+- Run `./scripts/check.sh` locally for compile, unit, Ruff, Pyright, and diff checks; `PYTHON` overrides the interpreter, and missing Ruff/Pyright prints the venv activation instruction. Bandit is conditional on installation. `pip-audit` runs only via `./scripts/check.sh --audit`. GitHub Actions uses only manual `workflow_dispatch`, not push or pull-request triggers.

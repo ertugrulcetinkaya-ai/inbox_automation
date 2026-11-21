@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PYTHON="${PYTHON:-python}"
 audit=false
 if [[ $# -gt 1 ]]; then
     printf 'Usage: %s [--audit]\n' "$0" >&2
@@ -14,8 +15,16 @@ if [[ $# -eq 1 ]]; then
     audit=true
 fi
 
-python -m compileall -q main.py telegram_listener.py mail_digest tests scripts
-python -m unittest discover -s tests -p 'test_*.py'
+for required_tool in ruff pyright; do
+    if ! command -v "$required_tool" >/dev/null 2>&1; then
+        printf "%s bulunamadı; venv'i aktive edin: source .venv/bin/activate\n" \
+            "$required_tool" >&2
+        exit 1
+    fi
+done
+
+"$PYTHON" -m compileall -q main.py telegram_listener.py mail_digest tests scripts
+"$PYTHON" -m unittest discover -s tests -p 'test_*.py'
 ruff check mail_digest main.py telegram_listener.py scripts tests
 pyright
 git diff --check

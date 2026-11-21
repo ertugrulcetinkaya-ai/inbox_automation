@@ -194,6 +194,8 @@ source .venv/bin/activate
 ./scripts/check.sh
 ```
 
+Betik `PYTHON` değişkeniyle farklı bir Python yorumlayıcısı alabilir ve `ruff` ya da `pyright` bulunmadığında venv'i etkinleştirme yönergesi verir.
+
 İsteğe bağlı runtime bağımlılık denetimi yalnızca açıkça istendiğinde çalıştırılır: `./scripts/check.sh --audit`. `bandit` kuruluysa yerel betik onu CI ile aynı `-s B108,B608` istisnalarıyla çalıştırır. GitHub Actions `push` ve `pull_request` üzerinde otomatik çalışmaz; yalnızca `workflow_dispatch` ile elle tetiklenir.
 
 Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixture'ları ve dış sistem hata akışlarını içerir. `tests/fixtures/` altında kişisel veri içermeyen 20 örnek bulunur; AppleScript timeout/bozuk çıktı, Telegram HTTP veya `ok:false` cevabı, 10.30/09.30/14.30 saatleri, tarih biçimleri, yıl geçişi, hafta günleri, quoted reply, iptal, erteleme ve çoklu tarih senaryoları test edilir.
