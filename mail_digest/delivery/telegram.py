@@ -112,8 +112,8 @@ def _send_chunk(token, chat_id, chunk, chunk_number, chunk_count, sleep=time.sle
     return False
 
 
-def send_telegram(message, sleep=None):
-    """Send every chunk or fail closed without recording delivery success.
+def send_text(token, chat_id, text, sleep=None) -> bool:
+    """Send text through Telegram, preserving chunking and bounded retries.
 
     Telegram has no transaction spanning multiple messages. If a later chunk
     fails, already delivered chunks may be repeated on the next run; the CLI
@@ -121,15 +121,11 @@ def send_telegram(message, sleep=None):
     """
 
     sleep = sleep or time.sleep
-    env = load_env()
-    token = env.get("TELEGRAM_BOT_TOKEN")
-    chat_id = env.get("TELEGRAM_CHAT_ID")
-
     if not token or not chat_id:
         log("Missing Telegram credentials in env file.")
         return False
 
-    chunks = _split_message(message)
+    chunks = _split_message(text)
     for index, chunk in enumerate(chunks):
         if not _send_chunk(
             token,
@@ -141,3 +137,15 @@ def send_telegram(message, sleep=None):
         ):
             return False
     return True
+
+
+def send_telegram(message, sleep=None):
+    """Load configured Telegram credentials and send a digest message."""
+
+    env = load_env()
+    return send_text(
+        env.get("TELEGRAM_BOT_TOKEN"),
+        env.get("TELEGRAM_CHAT_ID"),
+        message,
+        sleep=sleep,
+    )
