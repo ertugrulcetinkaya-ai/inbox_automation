@@ -41,9 +41,9 @@ def full_message(message_id, *, inbox=True, age_ms=1000, content="ordinary", sub
             "filename": "",
             "headers": [
                 {"name": "Subject", "value": subject},
-                {"name": "From", "value": "Fixture <fixture@example.test>"},
+                {"name": "From", "value": "Fixture <fixture1@example.com>"},
                 {"name": "Date", "value": "Wed, 19 Aug 2026 10:00:00 +0300"},
-                {"name": "Message-ID", "value": f"<{message_id}@example.test>"},
+                {"name": "Message-ID", "value": f"<{message_id}@example.com>"},
             ],
             "body": {"data": encoded(content)},
         },
@@ -514,12 +514,12 @@ class GmailSyncTests(unittest.TestCase):
             "gmail_message_id": "calendar-400d",
             "thread_id": "synthetic-thread",
             "internal_date_ms": NOW_MS - 400 * 86400 * 1000,
-            "sender": "Synthetic Organizer <organizer@example.test>",
+            "sender": "Synthetic Organizer <fixture2@example.com>",
             "subject": "Synthetic calendar event",
             "date": "synthetic date",
             "received_local_date": "synthetic date",
             "content": "",
-            "source_message_id": "synthetic-400d@example.test",
+            "source_message_id": "fixture3@example.com",
             "raw_source": "BEGIN:VCALENDAR\\nEND:VCALENDAR",
         }
         self.store.stage_upsert(old_record)

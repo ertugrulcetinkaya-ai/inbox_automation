@@ -20,9 +20,9 @@ class ParserPerformanceTests(unittest.TestCase):
         records = [
             {
                 "subject": f"Synthetic meeting {index:03d}",
-                "sender": "Fixture Organizer <organizer@example.test>",
+                "sender": "Fixture Organizer <fixture2@example.com>",
                 "received_date": target_date.isoformat(),
-                "source_message_id": f"synthetic-{index:03d}@example.test",
+                "source_message_id": f"synthetic-{index:03d}@example.com",
                 "content": content,
             }
             for index in range(100)

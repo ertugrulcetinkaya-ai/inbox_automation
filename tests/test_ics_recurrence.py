@@ -42,9 +42,9 @@ def record(*events, method=None, uid="synthetic-series"):
         lines.extend(event_lines)
     lines.append("END:VCALENDAR")
     return {
-        "source_message_id": f"{uid}@example.test",
+        "source_message_id": f"{uid}@example.com",
         "received_date": "2026-11-06T09:00:00",
-        "sender": "Synthetic Organizer <organizer@example.test>",
+        "sender": "Synthetic Organizer <fixture2@example.com>",
         "subject": "Synthetic calendar event",
         "content": "\n".join(lines),
     }
@@ -166,11 +166,11 @@ class ICSRecurrenceTests(unittest.TestCase):
 
     def test_utc_recurrence_id_replaces_occurrence_across_messages(self):
         master = record(self._berlin_series())
-        master["source_message_id"] = "synthetic-master@example.test"
+        master["source_message_id"] = "fixture6@example.com"
         update = record(
             self._berlin_override("RECURRENCE-ID:20261120T080000Z")
         )
-        update["source_message_id"] = "synthetic-update@example.test"
+        update["source_message_id"] = "fixture7@example.com"
 
         result = build_digest_result(
             [master, update], "daily", target_date=date(2026, 11, 20)

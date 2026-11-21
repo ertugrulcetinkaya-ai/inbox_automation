@@ -255,10 +255,10 @@ class MeetingReminderTests(unittest.TestCase):
 
 class DigestResultTests(unittest.TestCase):
     def test_digest_result_collects_meetings_once_and_exposes_count(self):
-        record = {"subject": "Fixture", "sender": "fixture@example.test"}
+        record = {"subject": "Fixture", "sender": "fixture1@example.com"}
         meeting = {
             "subject": "Fixture",
-            "sender": "fixture@example.test",
+            "sender": "fixture1@example.com",
             "date": date(2026, 8, 24),
             "time": "10:00",
             "sort_minutes": 600,

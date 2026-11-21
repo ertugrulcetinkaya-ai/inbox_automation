@@ -41,14 +41,14 @@ def event(
     return lines
 
 
-def ics_record(*events, subject="Synthetic calendar meeting", source_id="calendar@example.test"):
+def ics_record(*events, subject="Synthetic calendar meeting", source_id="fixture9@example.com"):
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "METHOD:REQUEST"]
     for value in events:
         lines.extend(value)
     lines.append("END:VCALENDAR")
     return {
         "subject": subject,
-        "sender": "Synthetic Organizer <organizer@example.test>",
+        "sender": "Synthetic Organizer <fixture2@example.com>",
         "received_date": "2026-11-21T09:00:00",
         "source_message_id": source_id,
         "content": "\n".join(lines),
@@ -62,7 +62,7 @@ def cache_records():
             "DTSTART;TZID=Europe/Istanbul:20261123T100000",
             recurrence="RRULE:FREQ=DAILY;COUNT=5",
         ),
-        source_id="master@example.test",
+        source_id="fixture10@example.com",
     )
     changed = ics_record(
         event(
@@ -72,7 +72,7 @@ def cache_records():
             recurrence_id="RECURRENCE-ID;TZID=Europe/Istanbul:20261125T100000",
             title="Synthetic changed occurrence",
         ),
-        source_id="update@example.test",
+        source_id="fixture11@example.com",
     )
     cancelled = ics_record(
         event(
@@ -82,13 +82,13 @@ def cache_records():
             recurrence_id="RECURRENCE-ID;TZID=Europe/Istanbul:20261124T100000",
             status="CANCELLED",
         ),
-        source_id="cancel@example.test",
+        source_id="fixture12@example.com",
     )
     semantic = {
         "subject": "Synthetic meeting review",
-        "sender": "Synthetic Organizer <organizer@example.test>",
+        "sender": "Synthetic Organizer <fixture2@example.com>",
         "received_date": "2026-11-21",
-        "source_message_id": "semantic@example.test",
+        "source_message_id": "fixture13@example.com",
         "content": "Meeting review on November 23, 2026 at 13:00.",
     }
     return [master, changed, cancelled, semantic]

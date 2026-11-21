@@ -1,5 +1,6 @@
 import ast
 import plistlib
+import re
 from contextlib import redirect_stdout
 from datetime import datetime
 from io import StringIO
@@ -120,12 +121,50 @@ class ArchitectureTests(unittest.TestCase):
         project_root = Path(main.__file__).parent
         template_paths = sorted(project_root.glob("launchd/*.plist.template"))
         self.assertTrue(template_paths)
+        user_home_prefix = "/" + "Users" + "/"
 
         for template_path in template_paths:
             template = template_path.read_text(encoding="utf-8")
             self.assertIn("__PROJECT_ROOT__", template)
             self.assertIn("__PYTHON_PATH__", template)
-            self.assertNotIn("/Users/ertugrulcetinkaya/Projects/mail_unread_digest", template)
+            self.assertNotIn(user_home_prefix, template)
+
+    def test_sources_and_fixtures_use_only_synthetic_email_domains(self):
+        from mail_digest.config import TARGET_EMAIL
+
+        project_root = Path(main.__file__).parent
+        email_pattern = re.compile(
+            r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+            re.IGNORECASE,
+        )
+        allowed_domains = {
+            "example.com",
+            "example.org",
+            "example.net",
+            "invalid",
+        }
+        # TODO(F0.2): remove this temporary exact-address exception when the
+        # target account is read from configuration instead of source code.
+        temporary_target_email = TARGET_EMAIL.casefold()
+        user_home_prefix = "/" + "Users" + "/"
+
+        for directory in ("tests", "mail_digest"):
+            for path in (project_root / directory).rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    continue
+
+                self.assertNotIn(user_home_prefix, content, path.name)
+                for email in email_pattern.findall(content):
+                    domain = email.rsplit("@", 1)[-1].casefold()
+                    self.assertTrue(
+                        domain in allowed_domains
+                        or email.casefold() == temporary_target_email,
+                        f"Unexpected non-synthetic email domain in {path.name}",
+                    )
 
     def test_all_launchd_templates_enable_unbuffered_python_output(self):
         project_root = Path(main.__file__).parent
