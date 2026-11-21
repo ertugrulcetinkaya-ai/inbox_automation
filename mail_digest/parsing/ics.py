@@ -216,6 +216,30 @@ def _ics_should_replace(current, candidate):
     return candidate.source_message_id > current.source_message_id
 
 
+def ics_master_should_replace(current, candidate):
+    """Choose a series master by SEQUENCE and then source freshness."""
+
+    if candidate.sequence != current.sequence:
+        return candidate.sequence > current.sequence
+    candidate_received = record_source_received_at(
+        {"source_received_at": candidate.source_received_at}
+    )
+    current_received = record_source_received_at(
+        {"source_received_at": current.source_received_at}
+    )
+    if candidate_received != current_received:
+        if current_received is None:
+            return candidate_received is not None
+        if candidate_received is None:
+            return False
+        return candidate_received > current_received
+    candidate_priority = _ics_status_priority(candidate.status)
+    current_priority = _ics_status_priority(current.status)
+    if candidate_priority != current_priority:
+        return candidate_priority > current_priority
+    return candidate.source_message_id > current.source_message_id
+
+
 def _parse_ics_properties(lines):
     properties = {}
     for line in lines:
@@ -342,7 +366,12 @@ def _recurrence_bound(value, rule_start, all_day, is_end):
         )
     if rule_start.tzinfo is not None:
         if bound.tzinfo is None:
-            return bound.replace(tzinfo=rule_start.tzinfo)
+            local_timezone = (
+                ZoneInfo(LOCAL_TIMEZONE_NAME)
+                if ZoneInfo is not None
+                else rule_start.tzinfo
+            )
+            bound = bound.replace(tzinfo=local_timezone)
         return bound.astimezone(rule_start.tzinfo)
     if bound.tzinfo is not None:
         return bound.astimezone(dt_timezone.utc).replace(tzinfo=None)
@@ -379,7 +408,7 @@ def _normalize_rrule_until(rule_text, rule_start):
     return ";".join(normalized_parts), until_limit
 
 
-def _expand_ics_series(meeting, properties, range_start, range_end):
+def expand_ics_series(meeting, properties, range_start, range_end):
     if meeting.start_at is None:
         return [meeting]
     rule_start, all_day = _rule_start(meeting.start_at)
@@ -499,10 +528,32 @@ def _ics_payloads_from_record(record):
     return detected, payloads
 
 
-def parse_ics_meetings(record, range_start=None, range_end=None):
-    """Return parsed ICS meetings, expanding recurring series in the range."""
+def parse_ics_event_definitions(record):
+    """Return parsed (master or override, properties) definitions for one mail.
+
+    ``None`` means the record has no calendar payload; an empty list means it
+    had a calendar payload but no usable VEVENT definitions.
+    """
+
     detected, payloads = _ics_payloads_from_record(record)
     if not detected:
+        return None
+
+    definitions = []
+    for payload in payloads:
+        _, blocks = _ics_event_blocks(payload)
+        for calendar_method, block in blocks:
+            properties = _parse_ics_properties(block)
+            meeting = _parse_ics_event(block, record, calendar_method, properties)
+            if meeting is not None:
+                definitions.append((meeting, properties))
+    return definitions
+
+
+def parse_ics_meetings(record, range_start=None, range_end=None):
+    """Return parsed ICS meetings, expanding recurring series in the range."""
+    definitions = parse_ics_event_definitions(record)
+    if definitions is None:
         return None
 
     if range_start is None:
@@ -513,33 +564,32 @@ def parse_ics_meetings(record, range_start=None, range_end=None):
 
     masters = {}
     overrides = {}
-    for payload in payloads:
-        _, blocks = _ics_event_blocks(payload)
-        for calendar_method, block in blocks:
-            properties = _parse_ics_properties(block)
-            meeting = _parse_ics_event(block, record, calendar_method, properties)
-            if meeting is None:
-                continue
-            destination = overrides if meeting.recurrence_id is not None else masters
-            key = _ics_event_key(meeting)
-            existing = destination.get(key)
-            if existing is None or _ics_should_replace(existing[0], meeting):
-                destination[key] = (meeting, properties)
+    for meeting, properties in definitions:
+        destination = overrides if meeting.recurrence_id is not None else masters
+        key = _ics_event_key(meeting)
+        existing = destination.get(key)
+        if existing is None:
+            should_replace = True
+        elif destination is masters:
+            should_replace = ics_master_should_replace(existing[0], meeting)
+        else:
+            should_replace = _ics_should_replace(existing[0], meeting)
+        if should_replace:
+            destination[key] = (meeting, properties)
 
     meetings_by_key = {}
     for meeting, properties in masters.values():
         if meeting.status == "CANCELLED":
             meetings_by_key[_ics_event_key(meeting)] = meeting
             continue
-        recurring = _expand_ics_series(meeting, properties, range_start, range_end)
+        recurring = expand_ics_series(meeting, properties, range_start, range_end)
         for occurrence in recurring:
             meetings_by_key[_ics_event_key(occurrence)] = occurrence
 
+    master_by_uid = {meeting.uid: meeting for meeting, _ in masters.values()}
     for meeting, _ in overrides.values():
         key = _ics_event_key(meeting)
-        current = meetings_by_key.get(key)
-        if current is None or _ics_should_replace(current, meeting) or (
-            current.sequence == meeting.sequence
-        ):
+        master = master_by_uid.get(meeting.uid)
+        if master is None or meeting.sequence >= master.sequence:
             meetings_by_key[key] = meeting
     return list(meetings_by_key.values())

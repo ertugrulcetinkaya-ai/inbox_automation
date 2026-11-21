@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 import stat
-from datetime import datetime, timedelta
+from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -23,7 +23,14 @@ from .reminder_state import load_last_successful_reminder_scan
 from .run_status import status_file_path
 
 
-STATUS_MODES = ("daily", "upcoming", "weekly", "attention", "reminder")
+STATUS_MODES = (
+    "daily",
+    "daily_scheduled",
+    "upcoming",
+    "weekly",
+    "attention",
+    "reminder",
+)
 
 
 def _local_naive(value):
@@ -133,6 +140,35 @@ def _format_time(value):
     return value.strftime("%Y-%m-%d %H:%M") if value is not None else "yok"
 
 
+def _scheduled_daily_status(modes, now):
+    if now.time() < datetime_time(8, 0):
+        return "henüz zamanı gelmedi", False
+
+    entry = modes.get("daily_scheduled")
+    if not isinstance(entry, dict):
+        entry = {}
+    success = _parse_timestamp(entry.get("last_success_at"))
+    failure = _parse_timestamp(entry.get("last_failure_at"))
+    skipped = _parse_timestamp(entry.get("last_skipped_lock_at"))
+    success_today = success if success is not None and success.date() == now.date() else None
+    failure_today = failure if failure is not None and failure.date() == now.date() else None
+    skipped_today = skipped if skipped is not None and skipped.date() == now.date() else None
+
+    if success_today is not None and success_today >= max(
+        (value for value in (failure_today, skipped_today) if value is not None),
+        default=success_today,
+    ):
+        return "gönderildi", True
+    if skipped_today is not None and skipped_today >= max(
+        (value for value in (success_today, failure_today) if value is not None),
+        default=skipped_today,
+    ):
+        return "atlandı (kilit dolu)", False
+    if failure_today is not None:
+        return "başarısız", False
+    return "henüz gönderilmedi", False
+
+
 def build_status_report(now=None):
     """Build a Turkish runtime report without network access or token refresh."""
 
@@ -144,15 +180,12 @@ def build_status_report(now=None):
         f"Çalışma kaydı: {status_file_state}",
         "Son çalışmalar:",
     ]
-    daily_success = None
     for mode in STATUS_MODES:
         entry = modes.get(mode)
         if not isinstance(entry, dict):
             entry = {}
         success = _parse_timestamp(entry.get("last_success_at"))
         failure = _parse_timestamp(entry.get("last_failure_at"))
-        if mode == "daily":
-            daily_success = success
         detail = (
             f"• {mode}: son başarı {_format_time(success)}; "
             f"son hata {_format_time(failure)}"
@@ -160,7 +193,13 @@ def build_status_report(now=None):
         error_type = entry.get("last_error_type")
         if isinstance(error_type, str) and error_type.isidentifier():
             detail += f" ({error_type})"
+        skipped = _parse_timestamp(entry.get("last_skipped_lock_at"))
+        if skipped is not None:
+            detail += f"; skipped_lock {_format_time(skipped)}"
         lines.append(detail)
+
+    scheduled_status, scheduled_succeeded = _scheduled_daily_status(modes, now)
+    lines.append(f"Planlı günlük özet (08:00): {scheduled_status}")
 
     token_text, token_problems = _token_status(now)
     lines.append(f"Gmail token: {token_text}")
@@ -190,8 +229,10 @@ def build_status_report(now=None):
     lines.append(f"Son hatırlatma taraması: {_format_time(reminder_scan)}")
 
     warnings = []
-    if daily_success is None or now - daily_success > timedelta(hours=26):
-        warnings.append("⚠️ daily son başarısı 26 saatten eski veya hiç yok")
+    if now.time() >= datetime_time(8, 0) and not scheduled_succeeded:
+        warnings.append(
+            f"⚠️ bugünkü planlı özet gönderilmedi: {scheduled_status}"
+        )
     if not isinstance(cache_age, timedelta) or cache_age > timedelta(minutes=30):
         warnings.append("⚠️ Gmail önbelleği 30 dakikadan eski veya yok")
     if reminder_scan is None or now - reminder_scan > timedelta(minutes=20):

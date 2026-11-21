@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from email.utils import parseaddr
@@ -11,8 +12,15 @@ from zoneinfo import ZoneInfo
 
 from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now, log
 from ..models import MeetingOccurrence
-from ..parsing.ics import recurrence_identity
-from ..parsing.meeting_parser import extract_meetings
+from ..parsing.ics import (
+    DEFAULT_RECURRENCE_RANGE_DAYS,
+    _ics_should_replace,
+    expand_ics_series,
+    ics_master_should_replace,
+    parse_ics_event_definitions,
+    recurrence_identity,
+)
+from ..parsing.meeting_parser import _meeting_to_digest_record, extract_meetings
 from .parse_cache import ParseCache, ParseCacheUnavailable, cache_key
 from ..utils import record_source_received_at
 
@@ -48,24 +56,44 @@ def _status_label(status):
 
 def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurrence]:
     records = list(records)
+    parse_failures = {}
+    semantic_records = []
+    calendar_definitions = []
 
-    def parse_uncached():
-        return [
-            extract_meetings(
+    for index, record in enumerate(records):
+        try:
+            definitions = parse_ics_event_definitions(record)
+        except Exception as exc:
+            parse_failures[index] = type(exc).__name__
+            continue
+        if definitions is None:
+            semantic_records.append((index, record))
+        else:
+            calendar_definitions.extend(definitions)
+
+    def parse_record(index, record):
+        try:
+            result = extract_meetings(
                 record,
                 start_date,
                 end_date,
                 include_cancelled=True,
                 include_lifecycle_outside_range=True,
             )
-            for record in records
-        ]
+        except Exception as exc:
+            parse_failures[index] = type(exc).__name__
+            return []
+        parse_failures.pop(index, None)
+        return result
+
+    def parse_uncached():
+        return [parse_record(index, record) for index, record in semantic_records]
 
     try:
         parsed_records = []
         pending = {}
         with ParseCache() as cache:
-            for record in records:
+            for index, record in semantic_records:
                 key = cache_key(
                     record,
                     start_date,
@@ -75,19 +103,21 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
                 )
                 result = cache.get(key)
                 if result is None:
-                    result = extract_meetings(
-                        record,
-                        start_date,
-                        end_date,
-                        include_cancelled=True,
-                        include_lifecycle_outside_range=True,
-                    )
-                    pending[key] = result
+                    result = parse_record(index, record)
+                    if index not in parse_failures:
+                        pending[key] = result
                 parsed_records.append(result)
             cache.store(start_date, pending)
     except ParseCacheUnavailable:
         log("Meeting parse cache unavailable; parsing without cache")
         parsed_records = parse_uncached()
+
+    if parse_failures:
+        counts = Counter(parse_failures.values())
+        summary = ", ".join(
+            f"{error_type}={count}" for error_type, count in sorted(counts.items())
+        )
+        log(f"Meeting parse failures: {summary}")
 
     meetings = [meeting for parsed in parsed_records for meeting in parsed]
 
@@ -210,6 +240,50 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
         # Equal timestamps are unusual, but a stable final tie-breaker keeps
         # aggregation independent of Gmail's record ordering.
         return candidate.get("source_message_id", "") > current.get("source_message_id", "")
+
+    masters = {}
+    overrides = {}
+    for meeting, properties in calendar_definitions:
+        if meeting.recurrence_id is None:
+            current = masters.get(meeting.uid)
+            if current is None or ics_master_should_replace(current[0], meeting):
+                masters[meeting.uid] = (meeting, properties)
+            continue
+
+        key = (meeting.uid, recurrence_identity(meeting.recurrence_id))
+        current = overrides.get(key)
+        if current is None or _ics_should_replace(current[0], meeting):
+            overrides[key] = (meeting, properties)
+
+    calendar_meetings = {}
+    calendar_end_date = (
+        end_date
+        if end_date is not None
+        else start_date + timedelta(days=DEFAULT_RECURRENCE_RANGE_DAYS)
+    )
+    for uid, (master, properties) in masters.items():
+        if master.status == "CANCELLED":
+            occurrences = [master]
+        else:
+            occurrences = expand_ics_series(
+                master,
+                properties,
+                start_date,
+                calendar_end_date,
+            )
+        for occurrence in occurrences:
+            key = (uid, recurrence_identity(occurrence.recurrence_id))
+            calendar_meetings[key] = occurrence
+
+    for key, (override, _) in overrides.items():
+        master_entry = masters.get(override.uid)
+        if master_entry is None or override.sequence >= master_entry[0].sequence:
+            calendar_meetings[key] = override
+
+    meetings.extend(
+        _meeting_to_digest_record(meeting, position=index)
+        for index, meeting in enumerate(calendar_meetings.values())
+    )
 
     latest_by_event = {}
     without_uid = []

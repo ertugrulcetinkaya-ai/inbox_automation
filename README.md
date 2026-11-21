@@ -80,7 +80,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 - `mail_digest/sources/gmail/`: Gmail OAuth, salt-okunur API, MIME normalizasyonu, SQLite cache ve history senkronizasyon katmanıdır.
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
-- `mail_digest/services/parse_cache.py`: tarih aralığı ve parser sürümüne bağlı SHA-256 anahtarlarla JSON ayrıştırma sonuçlarını SQLite'ta saklar; cache hatası digest'i engellemez.
+- `mail_digest/services/parse_cache.py`: tarih aralığı ve parser sürümüne bağlı SHA-256 anahtarlarla semantic ayrıştırma sonuçlarını SQLite'ta saklar; cache hatası digest'i engellemez. Recurring ICS master tanımları farklı mailler arasında birleştirilip seçilen seri açılımı servis katmanında yapılır.
 - `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları hash kimlikleriyle kaydeder ve son başarılı reminder taramasını cursor olarak tutarak aynı toplantı için tekrar bildirim gönderilmesini önler.
 - `mail_digest/services/run_status.py` and `mail_digest/services/health.py`: mod başına çalışma durumunu kişisel veri içermeden atomik kaydeder ve ağ kullanmadan `/durum`/`--status` raporunu oluşturur. Gmail token JSON'u yenileme yapmadan okunur; SQLite cache salt-okunur açılır.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
@@ -109,7 +109,7 @@ daily / upcoming Telegram digest
 
 Kod akışı katmanlıdır: `sources` Mail erişimini, `parsing` toplantı çıkarımını, `services` iş kurallarını, `delivery` Telegram gönderimini ve `cli` çalışma akışını taşır. Böylece tarih/ICS parser değişiklikleri Telegram gönderim koduna dokunmadan test edilebilir.
 
-Canonical `Meeting` modeli aşağıdaki alanları taşır. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Aynı UID ve SEQUENCE kayıtlarında `source_received_at` freshness tie-break olarak kullanılır; recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur. UID olmayan lifecycle iletilerinde Gmail `thread_id`, canonical gönderen e-postası ve konu ailesi tarih/saat bağlamıyla eşleştirilir; tarih-only iptaller aynı günün zamanlı davetlerini bastırır.
+Canonical `Meeting` modeli aşağıdaki alanları taşır. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Recurring master tanımları UID başına birleştirilir; en yüksek `SEQUENCE`, eşitlikte en yeni `source_received_at` seçilir. `SEQUENCE` değeri master ile eşit veya yüksek olan `RECURRENCE-ID` override'ı ilgili oluşuma tercih edilir. Recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur ve günlük sınırlar Europe/Istanbul saat diliminden etkinliğin saat dilimine çevrilir. UID olmayan lifecycle iletilerinde Gmail `thread_id`, canonical gönderen e-postası ve konu ailesi tarih/saat bağlamıyla eşleştirilir; tarih-only iptaller aynı günün zamanlı davetlerini bastırır.
 
 ### Meeting modeli
 
@@ -185,6 +185,7 @@ Uygulama ayarları aşağıdaki ortam değişkenlerinden veya Telegram kimlik bi
 |---|---|
 | `MAIL_SOURCE` | Mail kaynağı; varsayılan `gmail`, Apple Mail için açıkça `apple_mail`. |
 | `MAIL_DIGEST_LOCK_FILE` | Ortak digest kilidi; varsayılan `/tmp/mail_unread_digest.lock`. |
+| `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` | Planlı 08:00 özetinin ortak kilidi bekleme süresi; varsayılan `300` saniye. |
 | `MAIL_DIGEST_PARSE_CACHE_FILE` | Parse cache SQLite yolu; varsayılan `~/.hermes_local_automation/mail_digest/parse_cache.sqlite3`. |
 | `MAIL_DIGEST_STATUS_FILE` | Çalışma durumu JSON yolu; varsayılan `~/.hermes_local_automation/mail_digest/status.json`. |
 | `GMAIL_CREDENTIALS_FILE` | Gmail OAuth client dosyası; varsayılan `~/.hermes_local_automation/gmail/credentials.json`. |
@@ -216,7 +217,11 @@ Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth
    .venv/bin/python scripts/gmail_auth.py
    ```
 
-   Normal `main.py` çalışması hiçbir zaman tarayıcı açmaz. Token eksik, geçersiz veya yenilenemiyorsa açık bir hatayla durur.
+   Normal `main.py` çalışması hiçbir zaman tarayıcı açmaz. Yenilenen token, aynı dizinde
+   `0600` izinli geçici dosyaya yazılır, diske eşitlenir ve atomik olarak değiştirilir.
+   `RefreshError`/`invalid_grant` yeniden yetkilendirme gerektirir; `TransportError`,
+   socket veya timeout hataları geçicidir ve yeniden deneme önerir. Hata mesajları
+   sağlayıcı yanıtını ya da hassas metni içermez.
 
 4. İlk canlı kontrolü production job'ını değiştirmeden yapın:
 
@@ -226,7 +231,7 @@ Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth
 
 Varsayılan yollar `~/.hermes_local_automation/gmail/token.json` ve `~/.hermes_local_automation/gmail/cache.sqlite3`'tür. Sırasıyla `GMAIL_CREDENTIALS_FILE`, `GMAIL_TOKEN_FILE` ve `GMAIL_CACHE_FILE` ile değiştirilebilir. Bu credential, token ve cache dosyalarını repoya koymayın.
 
-İlk Gmail çalışması, `getProfile` history sınırını snapshot'tan önce alır; 31 günlük normal mesaj ve 367 günlük ICS sunucu sorgularını retention sınırlarıyla daraltır, staging snapshot oluşturur ve cache/checkpoint/`retention_version=2` değerini aynı SQLite transaction'ında etkinleştirir. Full sync snapshot mesajlarını varsayılan 10'luk Gmail batch istekleriyle alır; `GMAIL_BATCH_SIZE` değeri 1–50 arasında ayarlanabilir ve ardışık batch'ler varsayılan olarak 1 saniye bekler (`GMAIL_BATCH_PAUSE_SECONDS`). Tekil 404'ler silinmiş mesaj sayılır. HTTP 429 ile 403 `rateLimitExceeded`/`userRateLimitExceeded` yanıtları en fazla altı exponential-backoff denemesiyle yeniden denenir ve varsa `Retry-After` süresine uyulur; rate-limit alan batch öğeleri bekleme sonrasında küçülen batch'lerle yeniden gönderilir. Diğer 5xx/ağ hatalarında mevcut üç denemeli retry kuralı korunur. Operasyon logları HTTP durumu ve Google reason'ını veya ağ istisnasının türünü içerir; URL, mesaj kimliği ve hata gövdesi loglanmaz. Checkpoint'i olan eski veya retention sürümü eksik cache için full-sync geçişi altı saatten sık denenmez (`retention_upgrade_last_attempt_ms`). Geçiş full sync'i başarısız olursa hata türü ve güvenli API hata mesajı loglanır, mevcut checkpoint ile incremental sync sürdürülür ve `retention_version` yükseltilmez; sonraki geçiş denemesi en erken altı saat sonra yapılır. Sonraki çalışmalar yalnızca `messageAdded`, `messageDeleted`, `labelAdded` ve `labelRemoved` türündeki history değişikliklerini uzlaştırır; API çağrısında label filtresi kullanılmaz. Inbox dışındaki yeni ve cache'te bulunmayan mesajlar getirilmez, silinmiş mesajlar yerel cache'ten Gmail `get` çağrısı yapılmadan çıkarılır. Eski history checkpoint'i HTTP 404 verirse güvenli tam sync yeniden başlar. Mesaj içeriği bozuksa yapısal kimlik/INBOX/tarih bilgisi geçerli olduğu sürece boş içerikli degraded kayıt saklanır.
+İlk Gmail çalışması, `getProfile` history sınırını snapshot'tan önce alır; 31 günlük normal mesaj ve 367 günlük ICS sunucu sorgularını retention sınırlarıyla daraltır, staging snapshot oluşturur ve cache/checkpoint/`retention_version=2` değerini aynı SQLite transaction'ında etkinleştirir. Full sync snapshot mesajlarını varsayılan 10'luk Gmail batch istekleriyle alır; `GMAIL_BATCH_SIZE` değeri 1–50 arasında ayarlanabilir ve ardışık batch'ler varsayılan olarak 1 saniye bekler (`GMAIL_BATCH_PAUSE_SECONDS`). Tekil 404'ler silinmiş mesaj sayılır. HTTP 429 ile 403 `rateLimitExceeded`/`userRateLimitExceeded` yanıtları en fazla altı exponential-backoff denemesiyle yeniden denenir ve varsa `Retry-After` süresine uyulur; rate-limit alan batch öğeleri bekleme sonrasında küçülen batch'lerle yeniden gönderilir. Diğer 5xx/ağ hatalarında mevcut üç denemeli retry kuralı korunur. Operasyon logları HTTP durumu ve Google reason'ını veya ağ istisnasının türünü içerir; URL, mesaj kimliği ve hata gövdesi loglanmaz. Checkpoint'i olan eski veya retention sürümü eksik cache için full-sync geçişi altı saatten sık denenmez (`retention_upgrade_last_attempt_ms`). Geçiş full sync'i başarısız olursa hata türü ve güvenli API hata mesajı loglanır, mevcut checkpoint ile incremental sync sürdürülür ve `retention_version` yükseltilmez; sonraki geçiş denemesi en erken altı saat sonra yapılır. Sonraki çalışmalar yalnızca `messageAdded`, `messageDeleted`, `labelAdded` ve `labelRemoved` türündeki history değişikliklerini uzlaştırır; API çağrısında label filtresi kullanılmaz. `messagesAdded` kaydında `labelIds` yoksa mesaj Gmail'den çekilir ve tam mesajdaki `INBOX` etiketiyle filtrelenir; `labelIds` varsa ve `INBOX` içermiyorsa, yerel cache'te bulunmayan mesaj çekilmez. Silinmiş mesajlar yerel cache'ten Gmail `get` çağrısı yapılmadan çıkarılır. Eski history checkpoint'i HTTP 404 verirse güvenli tam sync yeniden başlar. Mesaj içeriği bozuksa yapısal kimlik/INBOX/tarih bilgisi geçerli olduğu sürece boş içerikli degraded kayıt saklanır.
 
 Production transport Gmail'dir: `MAIL_SOURCE=gmail` kullanın. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest başarısız olur. launchd dosyalarını Gmail ayarlarıyla preview olarak üretmek için:
 
@@ -241,6 +246,9 @@ Gmail MIME gövdeleri bounded policy ile işlenir (`MAX_BODY_BYTES=256 KiB`, `MA
 Semantic body-only toplantılarda tarih ve saat birlikte aranır. Bunun istisnası,
 aynı tarih bağlamında açık toplantı ve iptal ifadesi bulunan date-only semantic
 cancellation'dır: eski davetin saati korunarak lifecycle eşleştirmesine bırakılır.
+Türkçe ay ve göreli tarih adları büyük/küçük harf duyarsızdır; ay adlarının ASCII
+varyantları da tanınır. Bir kaydın parser hatası diğer kayıtları durdurmaz; digest
+yalnızca hata sınıfı sayaçlarını loglar.
 ICS motoru recurring master davetlerini yalnızca istenen aralık için açar; günlük,
 haftalık ve gelecek görünümleri kendi aralıklarıyla sınırlıdır. Seri ana iptali
 eşit veya daha yüksek `SEQUENCE` ile tüm occurrence'ları bastırır;
@@ -258,7 +266,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Mac Studio ve MacBook Pro geliştirme içindir.
 - Mac Mini tek runtime/production makinesidir.
 - `telegram_listener.py`, bu botun tek Telegram polling ve komut sahibidir. Aynı token için başka bir polling süreci veya webhook çalıştırmayın; deploy betiği launchd içinde Hermes işi görürse durur.
-- 08:00 launchd çalışması ile Telegram komutu aynı `run_digest()` akışını kullanır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. CLI/launchd varsayılan olarak hemen döner; bağımsız Telegram listener aynı kilidi 30 saniyeye kadar 0,5 saniyelik aralıklarla bekler. Dosyanın diskte kalması stale-lock oluşturmaz.
+- 08:00 summary plist'i `main.py --scheduled` çağırır ve ortak kilidi varsayılan 300 saniyeye kadar `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` ayarıyla bekler. Kilit yine doluysa `status.json` içinde `daily_scheduled` için `skipped_lock` sonucu kaydedilir ve süreç `75` koduyla çıkar. Telegram komutları `daily` anahtarını kullanır; manuel başarı planlı özetin durumunu gizlemez. `/durum`, planlı özetin henüz zamanı gelmediğini, gönderildiğini, başarısız olduğunu veya kilit nedeniyle atlandığını gösterir. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Diğer CLI çağrıları varsayılan olarak hemen döner; bağımsız Telegram listener aynı kilidi 30 saniyeye kadar 0,5 saniyelik aralıklarla bekler. Dosyanın diskte kalması stale-lock oluşturmaz.
 - CLI ve listener başlangıcında yalnızca o sürecin launchd logları döndürülür; iki süreç diğerinin loglarına dokunmaz ve dosya sistemi hataları digest akışını durdurmaz. Listener launchd işi `ThrottleInterval=30` ile çökme döngülerini sınırlar.
 - Üç launchd plist şablonu `PYTHONUNBUFFERED=1` ayarlar; ayrıca listener'daki her `print()` `flush=True` kullanır. Başlangıç, komut ve hata çıktıları böylece tamponda beklemeden launchd loglarına yazılır.
 - Beş dakikalık hatırlatma görevi de aynı `run_digest()` ve `flock` akışını kullanır; günlük özet veya Telegram komutuyla çakışırsa güvenli biçimde o turu atlar.

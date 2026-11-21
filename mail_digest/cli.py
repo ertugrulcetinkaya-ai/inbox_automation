@@ -4,6 +4,7 @@ import argparse
 
 from .config import (
     PROJECT_ROOT,
+    daily_lock_wait_seconds,
     local_now,
     log,
     reminder_minutes,
@@ -25,7 +26,11 @@ from .services.reminder_state import (
     mark_reminders_sent,
     reminder_key,
 )
-from .services.run_status import record_run_finished, record_run_started
+from .services.run_status import (
+    record_run_finished,
+    record_run_skipped_lock,
+    record_run_started,
+)
 from .sources import MailSourceConfigurationError, fetch_mail, selected_source_name
 
 
@@ -131,39 +136,56 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
     return 0
 
 
-def run_digest(upcoming=False, dry_run=False, mode=None, wait_seconds=0):
+def run_digest(upcoming=False, dry_run=False, mode=None, wait_seconds=0, scheduled=False):
     """Run one digest while holding the shared process-level lock."""
 
-    with digest_lock(wait_seconds=wait_seconds):
-        selected_mode = mode or ("upcoming" if upcoming else "daily")
-        if not dry_run:
-            record_run_started(selected_mode)
-        kwargs = {"upcoming": upcoming, "dry_run": dry_run}
-        if mode is not None:
-            kwargs["mode"] = mode
-        try:
-            result = _run_digest(**kwargs)
-        except Exception as exc:
+    selected_mode = mode or ("upcoming" if upcoming else "daily")
+    if scheduled and selected_mode != "daily":
+        raise ValueError("scheduled mode is only valid for the daily digest")
+    status_mode = "daily_scheduled" if scheduled else selected_mode
+    lock_wait = daily_lock_wait_seconds() if scheduled else wait_seconds
+    try:
+        with digest_lock(wait_seconds=lock_wait):
+            if not dry_run:
+                record_run_started(status_mode)
+            kwargs = {"upcoming": upcoming, "dry_run": dry_run}
+            if mode is not None:
+                kwargs["mode"] = mode
+            try:
+                result = _run_digest(**kwargs)
+            except Exception as exc:
+                if not dry_run:
+                    record_run_finished(
+                        status_mode,
+                        succeeded=False,
+                        error_type=exc.__class__,
+                    )
+                raise
             if not dry_run:
                 record_run_finished(
-                    selected_mode,
-                    succeeded=False,
-                    error_type=exc.__class__,
+                    status_mode,
+                    succeeded=result == 0,
+                    error_type="DigestFailed" if result != 0 else None,
                 )
+            return result
+    except DigestAlreadyRunning:
+        if not scheduled:
             raise
         if not dry_run:
-            record_run_finished(
-                selected_mode,
-                succeeded=result == 0,
-                error_type="DigestFailed" if result != 0 else None,
-            )
-        return result
+            record_run_skipped_lock(status_mode)
+        log("Scheduled daily digest skipped because the digest lock stayed busy")
+        return 75
 
 
 def main():
     rotate_logs(PROJECT_ROOT / "logs", names=CLI_LOG_NAMES)
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fetch and format but do not send")
+    parser.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Mark this daily run as scheduled and wait for the shared lock",
+    )
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument(
         "--status",
@@ -192,6 +214,17 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.scheduled and (
+        args.status or args.upcoming or args.week or args.attention or args.reminder
+    ):
+        parser.error("--scheduled can only be used with the daily digest")
+    if args.scheduled:
+        try:
+            daily_lock_wait_seconds()
+        except ValueError as exc:
+            log(f"Scheduled daily lock configuration error: {exc}")
+            return 1
+
     if args.status:
         report = build_status_report()
         if args.dry_run:
@@ -208,7 +241,11 @@ def main():
         elif args.reminder:
             mode = "reminder"
         if mode is None:
-            return run_digest(upcoming=args.upcoming, dry_run=args.dry_run)
+            return run_digest(
+                upcoming=args.upcoming,
+                dry_run=args.dry_run,
+                scheduled=args.scheduled,
+            )
         return run_digest(dry_run=args.dry_run, mode=mode)
     except DigestAlreadyRunning:
         # A concurrent launch is a normal no-op for launchd. The Telegram

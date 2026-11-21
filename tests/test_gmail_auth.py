@@ -1,8 +1,12 @@
 import stat
+import os
+import socket
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+from google.auth.exceptions import RefreshError, TransportError
 
 from mail_digest.config import GMAIL_SCOPES
 from mail_digest.sources.gmail.auth import GmailAuthError, load_credentials, write_private_text
@@ -36,15 +40,55 @@ class GmailAuthTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
     @patch("mail_digest.sources.gmail.auth.Credentials.from_authorized_user_file")
-    def test_refresh_failure_is_actionable(self, loader):
+    def test_refresh_error_requests_reauthorization_without_echoing_provider_text(self, loader):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "token.json"
             path.write_text("{}")
             credentials = Mock(expired=True, refresh_token="refresh")
-            credentials.refresh.side_effect = RuntimeError("revoked")
+            credentials.refresh.side_effect = RefreshError("invalid_grant private detail")
             loader.return_value = credentials
-            with self.assertRaisesRegex(GmailAuthError, "gmail_auth.py"):
+            with self.assertRaisesRegex(GmailAuthError, "gmail_auth.py") as raised:
                 load_credentials(path)
+            self.assertNotIn("invalid_grant", str(raised.exception))
+
+    @patch("mail_digest.sources.gmail.auth.Credentials.from_authorized_user_file")
+    def test_transport_error_is_reported_as_temporary(self, loader):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "token.json"
+            path.write_text("{}")
+            credentials = Mock(expired=True, refresh_token="refresh")
+            credentials.refresh.side_effect = TransportError("private transport detail")
+            loader.return_value = credentials
+            with self.assertRaisesRegex(GmailAuthError, "temporarily") as raised:
+                load_credentials(path)
+            self.assertNotIn("gmail_auth.py", str(raised.exception))
+            self.assertNotIn("private transport detail", str(raised.exception))
+
+    @patch("mail_digest.sources.gmail.auth.Credentials.from_authorized_user_file")
+    def test_timeout_is_reported_as_temporary(self, loader):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "token.json"
+            path.write_text("{}")
+            credentials = Mock(expired=True, refresh_token="refresh")
+            credentials.refresh.side_effect = TimeoutError("private timeout detail")
+            loader.return_value = credentials
+            with self.assertRaisesRegex(GmailAuthError, "temporarily") as raised:
+                load_credentials(path)
+            self.assertNotIn("gmail_auth.py", str(raised.exception))
+            self.assertNotIn("private timeout detail", str(raised.exception))
+
+    @patch("mail_digest.sources.gmail.auth.Credentials.from_authorized_user_file")
+    def test_socket_timeout_is_reported_as_temporary(self, loader):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "token.json"
+            path.write_text("{}")
+            credentials = Mock(expired=True, refresh_token="refresh")
+            credentials.refresh.side_effect = socket.timeout("private socket detail")
+            loader.return_value = credentials
+            with self.assertRaisesRegex(GmailAuthError, "temporarily") as raised:
+                load_credentials(path)
+            self.assertNotIn("gmail_auth.py", str(raised.exception))
+            self.assertNotIn("private socket detail", str(raised.exception))
 
     def test_missing_token_never_imports_or_starts_browser_flow(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -57,6 +101,31 @@ class GmailAuthTests(unittest.TestCase):
             write_private_text(path, "secret")
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+
+    def test_private_writer_preserves_existing_file_when_write_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "token.json"
+            path.write_text("existing token", encoding="utf-8")
+            real_fdopen = os.fdopen
+
+            def failing_fdopen(descriptor, *args, **kwargs):
+                real_handle = real_fdopen(descriptor, *args, **kwargs)
+                mock_handle = MagicMock()
+                mock_handle.__enter__.return_value = mock_handle
+                mock_handle.__exit__.side_effect = lambda *exc: real_handle.close()
+                mock_handle.write.side_effect = OSError("synthetic write failure")
+                mock_handle.fileno.return_value = real_handle.fileno()
+                return mock_handle
+
+            with patch(
+                "mail_digest.sources.gmail.auth.os.fdopen",
+                side_effect=failing_fdopen,
+            ):
+                with self.assertRaisesRegex(OSError, "synthetic write failure"):
+                    write_private_text(path, "replacement")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "existing token")
+            self.assertEqual(list(path.parent.glob(".token.json.*")), [])
 
     @patch("mail_digest.sources.gmail.auth.build")
     @patch("mail_digest.sources.gmail.auth.AuthorizedHttp")

@@ -15,7 +15,7 @@ from ..config import (
     SEMANTIC_TENTATIVE_RE,
 )
 from ..models import Meeting, MeetingOccurrence
-from .dates import _date_hits, parse_received_date
+from .dates import _date_hits, parse_received_date, turkish_fold
 from .ics import parse_ics_meetings
 from .times import _time_for_date, _time_hits
 from ..utils import record_source_received_at, strip_quoted_reply
@@ -160,12 +160,12 @@ def _passes_detailed_semantic_review(subject, text, date_hit, time_hits=None, st
         return True
 
     context = _semantic_context_for_date(text, date_hit)
-    normalized_context = context.casefold()
-    has_meeting_context = bool(EXPLICIT_MEETING_CONTEXT_RE.search(context)) or any(
+    normalized_context = turkish_fold(context)
+    has_meeting_context = bool(EXPLICIT_MEETING_CONTEXT_RE.search(normalized_context)) or any(
         marker in normalized_context for marker in CALENDAR_MARKERS
     )
     if status == "CANCELLED":
-        return has_meeting_context and bool(SEMANTIC_CANCELLED_RE.search(context))
+        return has_meeting_context and bool(SEMANTIC_CANCELLED_RE.search(normalized_context))
     return has_meeting_context and _has_time_near_date(text, date_hit, time_hits)
 
 
@@ -188,11 +188,12 @@ def _received_date_for_record(record, fallback_date):
 
 def _semantic_status(text):
     """Infer lifecycle state from human-written cancellation/update language."""
-    if SEMANTIC_RESCHEDULED_RE.search(text):
+    normalized = turkish_fold(text)
+    if SEMANTIC_RESCHEDULED_RE.search(normalized):
         return "RESCHEDULED"
-    if SEMANTIC_CANCELLED_RE.search(text):
+    if SEMANTIC_CANCELLED_RE.search(normalized):
         return "CANCELLED"
-    if SEMANTIC_TENTATIVE_RE.search(text):
+    if SEMANTIC_TENTATIVE_RE.search(normalized):
         return "TENTATIVE"
     return "CONFIRMED"
 

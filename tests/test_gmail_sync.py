@@ -41,9 +41,9 @@ def full_message(message_id, *, inbox=True, age_ms=1000, content="ordinary", sub
             "filename": "",
             "headers": [
                 {"name": "Subject", "value": subject},
-                {"name": "From", "value": "Fixture <fixture@example.test>"},
+                {"name": "From", "value": "Fixture <fixture1@example.com>"},
                 {"name": "Date", "value": "Wed, 19 Aug 2026 10:00:00 +0300"},
-                {"name": "Message-ID", "value": f"<{message_id}@example.test>"},
+                {"name": "Message-ID", "value": f"<{message_id}@example.com>"},
             ],
             "body": {"data": encoded(content)},
         },
@@ -80,6 +80,10 @@ def event(array_name, message_id, labels=None):
     elif labels is not None:
         value["labelIds"] = labels
     return {array_name: [value]}
+
+
+def message_added_without_labels(message_id):
+    return {"messagesAdded": [{"message": {"id": message_id}}]}
 
 
 class FakeApi:
@@ -352,6 +356,31 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.ids(), [])
         self.assertEqual(self.store.checkpoint(), "91")
 
+    def test_message_added_without_label_ids_is_fetched_and_cached(self):
+        self.seed_old()
+        self.api.messages["new"] = full_message("new")
+        self.api.history["90"] = [
+            history_page("91", [message_added_without_labels("new")])
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.ids(), ["new", "old"])
+        self.assertEqual(self.api.get_calls, [("new", "full")])
+        self.assertEqual(self.store.checkpoint(), "91")
+
+    def test_message_added_without_labels_is_filtered_by_full_message_labels(self):
+        self.api.messages["sent"] = full_message("sent", inbox=False)
+        self.api.history["90"] = [
+            history_page("91", [message_added_without_labels("sent")])
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.api.get_calls, [("sent", "full")])
+        self.assertEqual(self.ids(), [])
+        self.assertEqual(self.store.checkpoint(), "91")
+
     def test_deleted_message_is_removed_without_get_in_incremental_sync(self):
         self.seed_old()
         self.api.history["90"] = [
@@ -485,12 +514,12 @@ class GmailSyncTests(unittest.TestCase):
             "gmail_message_id": "calendar-400d",
             "thread_id": "synthetic-thread",
             "internal_date_ms": NOW_MS - 400 * 86400 * 1000,
-            "sender": "Synthetic Organizer <organizer@example.test>",
+            "sender": "Synthetic Organizer <fixture2@example.com>",
             "subject": "Synthetic calendar event",
             "date": "synthetic date",
             "received_local_date": "synthetic date",
             "content": "",
-            "source_message_id": "synthetic-400d@example.test",
+            "source_message_id": "fixture3@example.com",
             "raw_source": "BEGIN:VCALENDAR\\nEND:VCALENDAR",
         }
         self.store.stage_upsert(old_record)
@@ -521,7 +550,9 @@ class GmailSyncTests(unittest.TestCase):
     def test_incremental_required_failure_makes_no_db_mutation(self):
         self.seed_old()
         self.api.messages["new"] = GmailApiError("transient exhausted")
-        self.api.history["90"] = [history_page("99", [event("messagesAdded", "new")])]
+        self.api.history["90"] = [
+            history_page("99", [message_added_without_labels("new")])
+        ]
         with self.assertRaises(GmailApiError):
             self.sync.incremental_sync("90")
         self.assertEqual(self.ids(), ["old"])

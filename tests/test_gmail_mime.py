@@ -57,9 +57,9 @@ class GmailMimeTests(unittest.TestCase):
             parts=[payload(mime_type="text/plain", data=b64("Toplantımız bugün saat 14:00."))],
             headers=[
                 {"name": "Subject", "value": "=?UTF-8?B?QcSfdXN0b3MgZGXEn2VybGVuZGlybWVzaQ==?="},
-                {"name": "From", "value": "=?UTF-8?Q?G=C3=B6nderen?= <sender@example.test>"},
+                {"name": "From", "value": "=?UTF-8?Q?G=C3=B6nderen?= <fixture4@example.com>"},
                 {"name": "Date", "value": "Wed, 19 Aug 2026 10:00:00 +0300"},
-                {"name": "Message-ID", "value": "<m1@example.test>"},
+                {"name": "Message-ID", "value": "<fixture5@example.com>"},
             ],
         )
         record = self.normalize(message(root))

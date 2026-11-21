@@ -34,7 +34,13 @@ def event(
     return lines
 
 
-def record(*events, method=None, uid="synthetic-series"):
+def record(
+    *events,
+    method=None,
+    uid="synthetic-series",
+    received_date="2026-11-06T09:00:00",
+    source_message_id=None,
+):
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0"]
     if method:
         lines.append(f"METHOD:{method}")
@@ -42,9 +48,9 @@ def record(*events, method=None, uid="synthetic-series"):
         lines.extend(event_lines)
     lines.append("END:VCALENDAR")
     return {
-        "source_message_id": f"{uid}@example.test",
-        "received_date": "2026-11-06T09:00:00",
-        "sender": "Synthetic Organizer <organizer@example.test>",
+        "source_message_id": source_message_id or f"{uid}@example.com",
+        "received_date": received_date,
+        "sender": "Synthetic Organizer <fixture2@example.com>",
         "subject": "Synthetic calendar event",
         "content": "\n".join(lines),
     }
@@ -58,6 +64,149 @@ def friday_series(**kwargs):
 
 
 class ICSRecurrenceTests(unittest.TestCase):
+    def test_newer_master_sequence_replaces_old_series_across_messages(self):
+        older = record(
+            event(
+                uid="cross-message-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261110T100000",
+                sequence=0,
+                recurrence="RRULE:FREQ=DAILY;COUNT=20",
+            ),
+            received_date="2026-11-20T09:00:00",
+            source_message_id="series-old@example.com",
+        )
+        newer = record(
+            event(
+                uid="cross-message-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261110T110000",
+                sequence=1,
+                recurrence="RRULE:FREQ=DAILY;COUNT=20",
+            ),
+            received_date="2026-11-21T09:00:00",
+            source_message_id="series-new@example.com",
+        )
+
+        result = build_digest_result(
+            [older, newer], "daily", target_date=date(2026, 11, 22)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("11:00", result.message)
+        self.assertNotIn("10:00", result.message)
+
+    def test_shortened_count_replaces_old_recurring_master(self):
+        older = record(
+            event(
+                uid="count-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261121T100000",
+                sequence=0,
+                recurrence="RRULE:FREQ=DAILY;COUNT=3",
+            ),
+            source_message_id="count-old@example.com",
+        )
+        newer = record(
+            event(
+                uid="count-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261121T100000",
+                sequence=1,
+                recurrence="RRULE:FREQ=DAILY;COUNT=1",
+            ),
+            received_date="2026-11-21T10:00:00",
+            source_message_id="count-new@example.com",
+        )
+
+        result = build_digest_result(
+            [older, newer], "daily", target_date=date(2026, 11, 22)
+        )
+
+        self.assertEqual(result.count, 0)
+
+    def test_new_exdate_in_updated_master_removes_that_occurrence(self):
+        older = record(
+            event(
+                uid="exdate-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261120T100000",
+                sequence=0,
+                recurrence="RRULE:FREQ=DAILY;COUNT=5",
+            ),
+            source_message_id="exdate-old@example.com",
+        )
+        newer = record(
+            event(
+                uid="exdate-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261120T100000",
+                sequence=1,
+                recurrence="RRULE:FREQ=DAILY;COUNT=5",
+                extra=("EXDATE;TZID=Europe/Istanbul:20261122T100000",),
+            ),
+            received_date="2026-11-21T10:00:00",
+            source_message_id="exdate-new@example.com",
+        )
+
+        result = build_digest_result(
+            [older, newer], "daily", target_date=date(2026, 11, 22)
+        )
+
+        self.assertEqual(result.count, 0)
+
+    def test_utc_daily_series_uses_istanbul_day_bounds(self):
+        recurring = record(
+            event(
+                uid="utc-daily-series",
+                start="DTSTART:20261110T220000Z",
+                recurrence="RRULE:FREQ=DAILY",
+            )
+        )
+
+        result = build_digest_result(
+            [recurring], "daily", target_date=date(2026, 11, 22)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("01:00", result.message)
+
+    def test_newer_equal_sequence_master_keeps_equal_sequence_override(self):
+        first_master = record(
+            event(
+                uid="override-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261106T100000",
+                sequence=0,
+                recurrence="RRULE:FREQ=DAILY;COUNT=30",
+            ),
+            received_date="2026-11-20T09:00:00",
+            source_message_id="override-master-old@example.com",
+        )
+        override = record(
+            event(
+                uid="override-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261122T110000",
+                sequence=0,
+                recurrence_id="RECURRENCE-ID;TZID=Europe/Istanbul:20261122T100000",
+            ),
+            received_date="2026-11-20T10:00:00",
+            source_message_id="override-mail@example.com",
+        )
+        newer_master = record(
+            event(
+                uid="override-series",
+                start="DTSTART;TZID=Europe/Istanbul:20261106T100000",
+                sequence=0,
+                recurrence="RRULE:FREQ=DAILY;COUNT=30",
+            ),
+            received_date="2026-11-21T09:00:00",
+            source_message_id="override-master-new@example.com",
+        )
+
+        result = build_digest_result(
+            [first_master, override, newer_master],
+            "daily",
+            target_date=date(2026, 11, 22),
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("11:00", result.message)
+        self.assertNotIn("10:00", result.message)
+
     def test_weekly_friday_master_renders_on_later_target_day(self):
         recurring = friday_series()
 
@@ -166,11 +315,11 @@ class ICSRecurrenceTests(unittest.TestCase):
 
     def test_utc_recurrence_id_replaces_occurrence_across_messages(self):
         master = record(self._berlin_series())
-        master["source_message_id"] = "synthetic-master@example.test"
+        master["source_message_id"] = "fixture6@example.com"
         update = record(
             self._berlin_override("RECURRENCE-ID:20261120T080000Z")
         )
-        update["source_message_id"] = "synthetic-update@example.test"
+        update["source_message_id"] = "fixture7@example.com"
 
         result = build_digest_result(
             [master, update], "daily", target_date=date(2026, 11, 20)

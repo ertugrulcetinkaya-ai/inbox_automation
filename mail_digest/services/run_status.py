@@ -83,6 +83,7 @@ def _record(mode, update):
                 "last_success_at": None,
                 "last_failure_at": None,
                 "last_error_type": None,
+                "last_skipped_lock_at": None,
             }
             modes[mode] = entry
         entry.update(update)
@@ -115,5 +116,17 @@ def record_run_finished(mode, succeeded, finished_at=None, error_type=None):
         {
             "last_failure_at": timestamp,
             "last_error_type": error_name,
+        },
+    )
+
+
+def record_run_skipped_lock(mode, skipped_at=None):
+    timestamp = _timestamp(skipped_at)
+    _record(
+        mode,
+        {
+            "last_failure_at": timestamp,
+            "last_error_type": "skipped_lock",
+            "last_skipped_lock_at": timestamp,
         },
     )

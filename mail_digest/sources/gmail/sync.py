@@ -32,8 +32,10 @@ def _affected_ids(history_pages, store):
             for entry in history.get("messagesAdded", []) or []:
                 message = entry.get("message") or {}
                 message_id = message.get("id")
+                label_ids = message.get("labelIds")
                 if message_id and (
-                    "INBOX" in (message.get("labelIds") or [])
+                    label_ids is None
+                    or "INBOX" in label_ids
                     or store.has_message(message_id)
                 ):
                     affected[message_id] = "fetch"

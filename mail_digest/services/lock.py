@@ -15,7 +15,7 @@ class DigestAlreadyRunning(RuntimeError):
 
 
 @contextmanager
-def digest_lock(lock_path: Path | None = None, wait_seconds=0):
+def digest_lock(lock_path: Path | None = None, wait_seconds: float = 0.0):
     """Hold an exclusive OS lock, optionally waiting in half-second intervals.
 
     The file itself is only a stable rendezvous point. It is deliberately not

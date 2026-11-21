@@ -18,6 +18,7 @@ from mail_digest.cli import main, run_digest
 from mail_digest.services.health import build_status_report
 from mail_digest.services.run_status import (
     record_run_finished,
+    record_run_skipped_lock,
     record_run_started,
 )
 from telegram_listener import process_update
@@ -106,7 +107,8 @@ class HealthStatusTests(unittest.TestCase):
 
         self.assertIn("Çalışma kaydı: yok", report)
         self.assertIn("Mail kaynağı: gmail", report)
-        self.assertIn("daily son başarısı 26 saatten eski veya hiç yok", report)
+        self.assertIn("Planlı günlük özet (08:00): henüz gönderilmedi", report)
+        self.assertIn("bugünkü planlı özet gönderilmedi", report)
         self.assertIn("Gmail önbelleği: son güncelleme", report)
         self.assertIn("mesaj sayısı 2", report)
         get.assert_not_called()
@@ -131,7 +133,7 @@ class HealthStatusTests(unittest.TestCase):
         self.assertIn("ValueError", report)
         self.assertIn("Gmail token: sorun var", report)
         self.assertIn("token süresi dolmuş", report)
-        self.assertIn("daily son başarısı 26 saatten eski", report)
+        self.assertIn("bugünkü planlı özet gönderilmedi", report)
         self.assertIn("Gmail önbelleği 30 dakikadan eski", report)
         self.assertIn("hatırlatma taraması 20 dakikadan eski", report)
 
@@ -142,6 +144,37 @@ class HealthStatusTests(unittest.TestCase):
 
         self.assertIn("Gmail token: dosya yok", report)
         self.assertIn("token dosyası yok", report)
+
+    def test_manual_daily_success_does_not_hide_missing_scheduled_digest(self):
+        self.write_status(daily_success=self.now)
+        payload = json.loads(self.status_path.read_text(encoding="utf-8"))
+        payload["modes"]["daily_scheduled"] = {
+            "last_started_at": None,
+            "last_success_at": None,
+            "last_failure_at": (self.now.replace(hour=8, minute=5)).isoformat(),
+            "last_error_type": "ValueError",
+            "last_skipped_lock_at": None,
+        }
+        self.status_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        report = build_status_report(now=self.now)
+
+        self.assertIn("• daily: son başarı 2026-11-21 12:00", report)
+        self.assertIn("Planlı günlük özet (08:00): başarısız", report)
+        self.assertIn("bugünkü planlı özet gönderilmedi: başarısız", report)
+
+    def test_scheduled_daily_skip_is_recorded_and_reported(self):
+        skipped_at = self.now.replace(hour=8, minute=1)
+        record_run_skipped_lock("daily_scheduled", skipped_at)
+
+        payload = json.loads(self.status_path.read_text(encoding="utf-8"))
+        entry = payload["modes"]["daily_scheduled"]
+        self.assertEqual(entry["last_error_type"], "skipped_lock")
+        self.assertEqual(entry["last_skipped_lock_at"], skipped_at.isoformat())
+
+        report = build_status_report(now=self.now)
+
+        self.assertIn("Planlı günlük özet (08:00): atlandı (kilit dolu)", report)
 
     def test_token_with_broad_permissions_is_flagged(self):
         self.write_token(expiry=self.now + timedelta(days=1), permissions=0o644)
@@ -170,7 +203,13 @@ class HealthStatusTests(unittest.TestCase):
         weekly = payload["modes"]["weekly"]
         self.assertEqual(
             set(weekly),
-            {"last_started_at", "last_success_at", "last_failure_at", "last_error_type"},
+            {
+                "last_started_at",
+                "last_success_at",
+                "last_failure_at",
+                "last_error_type",
+                "last_skipped_lock_at",
+            },
         )
         self.assertIn("last_started_at", weekly)
         self.assertIn("last_success_at", weekly)

@@ -18,7 +18,7 @@ class MeetingDateContextTests(unittest.TestCase):
         self.received_date = date(2026, 8, 7)
         self.today = date(2026, 8, 14)
         self.record = {
-            "sender": "Sinem Arın <sarin@ford.com.tr>",
+            "sender": "Deniz Örnek <fixture8@example.com>",
             "subject": "Satış Sonrası Bilgilendirme Webinarı - Ağustos",
             "date": "Friday, August 7, 2026 at 09:00:00",
             "content": (
