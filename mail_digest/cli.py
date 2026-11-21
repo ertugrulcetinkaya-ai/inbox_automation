@@ -16,6 +16,7 @@ from .services.meeting_service import (
     format_reminder_digest,
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
+from .services.health import build_status_report
 from .services.log_rotation import CLI_LOG_NAMES, rotate_logs
 from .services.reminder_state import (
     load_last_successful_reminder_scan,
@@ -24,6 +25,7 @@ from .services.reminder_state import (
     mark_reminders_sent,
     reminder_key,
 )
+from .services.run_status import record_run_finished, record_run_started
 from .sources import MailSourceConfigurationError, fetch_mail, selected_source_name
 
 
@@ -133,10 +135,26 @@ def run_digest(upcoming=False, dry_run=False, mode=None):
     """Run one digest while holding the shared process-level lock."""
 
     with digest_lock():
+        selected_mode = mode or ("upcoming" if upcoming else "daily")
+        record_run_started(selected_mode)
         kwargs = {"upcoming": upcoming, "dry_run": dry_run}
         if mode is not None:
             kwargs["mode"] = mode
-        return _run_digest(**kwargs)
+        try:
+            result = _run_digest(**kwargs)
+        except Exception as exc:
+            record_run_finished(
+                selected_mode,
+                succeeded=False,
+                error_type=exc.__class__,
+            )
+            raise
+        record_run_finished(
+            selected_mode,
+            succeeded=result == 0,
+            error_type="DigestFailed" if result != 0 else None,
+        )
+        return result
 
 
 def main():
@@ -144,6 +162,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fetch and format but do not send")
     output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
+        "--status",
+        action="store_true",
+        help="Show local runtime health or send it to Telegram",
+    )
     output_group.add_argument(
         "--upcoming",
         action="store_true",
@@ -165,6 +188,13 @@ def main():
         help="Send reminders due in the configured reminder window",
     )
     args = parser.parse_args()
+
+    if args.status:
+        report = build_status_report()
+        if args.dry_run:
+            print(report)
+            return 0
+        return 0 if send_telegram(report) else 1
 
     try:
         mode = None

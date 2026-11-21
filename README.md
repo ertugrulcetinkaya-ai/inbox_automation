@@ -33,6 +33,8 @@ Projenin desteklediği aşağıdaki komutlar bağımsız listener'da doğrudan k
 | Dikkat gerektiren toplantılar | `/dikkat` | `/attention` |
 | Servis durumu | `/durum` | `/status` |
 
+`/durum` ve `/status`, her digest modunun son başarı/başarısızlık zamanını, seçili mail kaynağını, Gmail token dosyasının izin ve süre bilgisini, salt-okunur cache yaşını/kayıt sayısını ve son hatırlatma taramasını gösterir. Rapor yalnızca yerel dosyaları okur; OAuth token'ını yenilemez. `main.py --status --dry-run` raporu terminale yazar; `main.py --status` Telegram'a gönderir. Her `run_digest()` çağrısı mod başına zamanları varsayılan `~/.hermes_local_automation/mail_digest/status.json` dosyasına atomik ve `0600` izinle kaydeder; yolu `MAIL_DIGEST_STATUS_FILE` ile değiştirebilirsiniz. Durum kaydı yazılamazsa yalnızca hata sınıfı loglanır ve digest devam eder.
+
 `telegram_listener.run_digest()` dış çağıranlara günlük, gelecek, haftalık ve dikkat özeti için başarı metni döndürür. Listener'ın kendi komut yolu bu başarı onayını tekrar göndermez; hata ve özetin hâlihazırda hazırlanmakta olduğunu bildiren yanıtları iletir.
 
 Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonlarında bölünür; tek bir satır sınırı aşıyorsa yalnızca o satır sert sınırdan kesilir.
@@ -56,6 +58,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 - `mail_digest/parsing/`: tarih, saat, ICS ve semantic meeting parser'larını birbirinden ayırır.
 - `mail_digest/services/meeting_service.py`: toplantı deduplikasyonu ve günlük/gelecek özetlerinin render edilmesini yönetir.
 - `mail_digest/services/reminder_state.py`: başarılı hatırlatmaları hash kimlikleriyle kaydeder ve son başarılı reminder taramasını cursor olarak tutarak aynı toplantı için tekrar bildirim gönderilmesini önler.
+- `mail_digest/services/run_status.py` and `mail_digest/services/health.py`: mod başına çalışma durumunu kişisel veri içermeden atomik kaydeder ve ağ kullanmadan `/durum`/`--status` raporunu oluşturur. Gmail token JSON'u yenileme yapmadan okunur; SQLite cache salt-okunur açılır.
 - `mail_digest/services/lock.py`: launchd ve Telegram girişlerini tek digest çalışmasına indiren process-level `fcntl.flock()` kilidini yönetir.
 - `mail_digest/services/log_rotation.py`: CLI ve bağımsız listener başlarken yalnızca kendi launchd log adlarını `PROJECT_ROOT/logs` altında, 5 MiB'tan büyükler için en fazla üç arşivle ve hata yutacak şekilde döndürür.
 - `mail_digest/delivery/telegram.py`: yalnızca Telegram gönderim katmanını içerir; parser katmanına bağımlı değildir.

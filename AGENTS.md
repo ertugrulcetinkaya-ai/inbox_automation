@@ -33,6 +33,7 @@
 - `telegram_listener.run_digest()` retains its success text contract for external callers; the listener's command path suppresses only that duplicate confirmation and sends failures or lock-contention responses.
 - Telegram messages are limited to 3,500 characters per part; split at line breaks when possible and hard-cut only a line longer than the limit.
 - CLI and listener entry points best-effort rotate only their own named launchd logs in `PROJECT_ROOT/logs` above 5 MiB, retaining at most three numbered archives; rotation errors must not interrupt a digest. Keep the listener launchd `ThrottleInterval` at 30 seconds.
+- Every locked `run_digest()` records per-mode start, success, and failure timestamps in `~/.hermes_local_automation/mail_digest/status.json` (override with `MAIL_DIGEST_STATUS_FILE`); persist only exception class names. `/durum`, `/status`, and `main.py --status` use a local-only health report, and `--status --dry-run` prints it without taking the digest lock.
 - Do not add LLM-dependent behavior to the v1 parser without an explicit design decision and tests.
 
 ## Runtime ownership
