@@ -237,16 +237,16 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
     command = (text or "").strip().lower()
     mode = MEETING_COMMANDS.get(command)
     if mode == "daily":
-        print("Command received: meeting digest")
+        print("Command received: meeting digest", flush=True)
         _send_digest_command_response(token, chat_id)
     elif mode == "upcoming":
-        print("Command received: upcoming meeting digest")
+        print("Command received: upcoming meeting digest", flush=True)
         _send_digest_command_response(token, chat_id, upcoming=True)
     elif mode in {"weekly", "attention"}:
-        print(f"Command received: {mode} meeting digest")
+        print(f"Command received: {mode} meeting digest", flush=True)
         _send_digest_command_response(token, chat_id, mode=mode)
     elif command in {"/durum", "/status"}:
-        print("Command received: status")
+        print("Command received: status", flush=True)
         send_text(token, chat_id, build_status_report())
 
 
@@ -283,7 +283,7 @@ def process_update(
 
 def main():
     rotate_logs(PROJECT_ROOT / "logs", names=LISTENER_LOG_NAMES)
-    print("Starting Telegram Mail Listener...")
+    print("Starting Telegram Mail Listener...", flush=True)
     token = None
     try:
         env = load_env()
@@ -292,14 +292,17 @@ def main():
         allowed_user_id = (env.get("TELEGRAM_ALLOWED_USER_ID") or "").strip() or None
         
         if not token or not chat_id:
-            print("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in env file.")
+            print("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in env file.", flush=True)
             return 1
 
         state_file = _update_state_file(env)
         try:
             processed_update_ids = _load_processed_update_ids(state_file)
         except TelegramUpdateStateError as exc:
-            print(f"Fatal error in listener: {str(exc).replace(token, '[REDACTED]')}")
+            print(
+                f"Fatal error in listener: {str(exc).replace(token, '[REDACTED]')}",
+                flush=True,
+            )
             return 1
 
         offset = 0
@@ -309,7 +312,7 @@ def main():
             try:
                 response = requests.get(url, params=params, timeout=35)
                 if response.status_code == 409:
-                    print(GET_UPDATES_CONFLICT_MESSAGE)
+                    print(GET_UPDATES_CONFLICT_MESSAGE, flush=True)
                     time.sleep(_listener_conflict_backoff_seconds())
                     return 1
                 response.raise_for_status()
@@ -335,16 +338,16 @@ def main():
                     offset = max(offset, update_id + 1)
             except (TelegramUpdateStateError, TelegramConfigurationError) as exc:
                 safe_error = str(exc).replace(token, "[REDACTED]")
-                print(f"Fatal error in listener: {safe_error}")
+                print(f"Fatal error in listener: {safe_error}", flush=True)
                 return 1
             except Exception as exc:
                 safe_error = str(exc).replace(token, "[REDACTED]")
-                print(f"Polling error: {safe_error}")
+                print(f"Polling error: {safe_error}", flush=True)
                 time.sleep(5)
 
     except Exception as exc:
         safe_error = str(exc).replace(token, "[REDACTED]") if token else str(exc)
-        print(f"Fatal error in listener: {safe_error}")
+        print(f"Fatal error in listener: {safe_error}", flush=True)
         return 1
 
 if __name__ == "__main__":

@@ -34,5 +34,6 @@
 - GitHub `main` is canonical. Mac Studio and MacBook Pro are development machines; Mac Mini is the production/runtime machine.
 - The standalone `telegram_listener.py` is the sole Telegram polling owner. Do not start a second poller or webhook for the same bot.
 - Route digest entry points through the shared `mail_digest.cli.run_digest()` service and its process-level lock; do not recreate lock-file existence checks or remove the lock file.
+- Set `PYTHONUNBUFFERED=1` in all launchd plist templates and use `flush=True` for listener `print()` calls so Python stdout is written to launchd logs without buffering.
 - Do not load, restart, or remove launchd services, deploy, or access the Mac Mini unless the user explicitly requests that action. The deploy script's default mode is preview only; never add an implicit apply step.
 - See README's [Çalıştırma modeli](README.md#çalıştırma-modeli) for operational details.

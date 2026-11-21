@@ -1,8 +1,10 @@
+import ast
+import plistlib
 from contextlib import redirect_stdout
 from datetime import datetime
 from io import StringIO
-import unittest
 from pathlib import Path
+import unittest
 from unittest.mock import patch
 
 import main
@@ -124,6 +126,37 @@ class ArchitectureTests(unittest.TestCase):
             self.assertIn("__PROJECT_ROOT__", template)
             self.assertIn("__PYTHON_PATH__", template)
             self.assertNotIn("/Users/ertugrulcetinkaya/Projects/mail_unread_digest", template)
+
+    def test_all_launchd_templates_enable_unbuffered_python_output(self):
+        project_root = Path(main.__file__).parent
+        template_paths = sorted(project_root.glob("launchd/*.plist.template"))
+
+        self.assertEqual(len(template_paths), 3)
+        for template_path in template_paths:
+            with self.subTest(template=template_path.name):
+                template = plistlib.loads(template_path.read_bytes())
+                self.assertEqual(
+                    template["EnvironmentVariables"].get("PYTHONUNBUFFERED"), "1"
+                )
+
+    def test_listener_print_calls_flush_stdout(self):
+        project_root = Path(main.__file__).parent
+        listener_path = project_root / "telegram_listener.py"
+        tree = ast.parse(listener_path.read_text(encoding="utf-8"))
+        print_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+        ]
+
+        self.assertTrue(print_calls)
+        for call in print_calls:
+            with self.subTest(line=call.lineno):
+                flush = next((kw.value for kw in call.keywords if kw.arg == "flush"), None)
+                self.assertIsInstance(flush, ast.Constant)
+                self.assertIs(flush.value, True)
 
     def test_deploy_script_mktemp_calls_use_portable_templates(self):
         project_root = Path(main.__file__).parent
