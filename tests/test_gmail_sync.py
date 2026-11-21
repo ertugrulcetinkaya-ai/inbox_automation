@@ -12,6 +12,7 @@ from mail_digest.sources.gmail.store import GmailStore
 from mail_digest.services.meeting_service import build_digest_result
 from mail_digest.sources.gmail.sync import (
     CALENDAR_WINDOW_MS,
+    FETCH_BATCH_SIZE,
     FULL_SYNC_QUERIES,
     GmailSynchronizer,
     WINDOW_MS,
@@ -139,7 +140,13 @@ class GmailSyncTests(unittest.TestCase):
         self.path = Path(self.temp.name) / "cache.sqlite3"
         self.store = GmailStore(self.path)
         self.api = FakeApi()
-        self.sync = GmailSynchronizer(self.api, self.store, now_ms=lambda: NOW_MS)
+        self.sleeps = []
+        self.sync = GmailSynchronizer(
+            self.api,
+            self.store,
+            now_ms=lambda: NOW_MS,
+            sleep=self.sleeps.append,
+        )
 
     def tearDown(self):
         self.store.close()
@@ -193,16 +200,22 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.ids(), sorted(self.api.listed))
         self.assertEqual(self.api.batch_calls, [(sorted(self.api.listed), "full")])
 
-    def test_full_sync_fetches_snapshot_in_batches_of_fifty(self):
-        self.api.listed = [f"message-{index:03d}" for index in range(101)]
+    def test_full_sync_fetches_snapshot_in_configured_batches(self):
+        self.api.listed = [
+            f"message-{index:03d}" for index in range(2 * FETCH_BATCH_SIZE + 1)
+        ]
         self.api.messages = {
             message_id: full_message(message_id) for message_id in self.api.listed
         }
 
         self.sync.full_sync()
 
-        self.assertEqual([len(ids) for ids, _format in self.api.batch_calls], [50, 50, 1])
-        self.assertEqual(len(self.ids()), 101)
+        self.assertEqual(
+            [len(ids) for ids, _format in self.api.batch_calls],
+            [FETCH_BATCH_SIZE, FETCH_BATCH_SIZE, 1],
+        )
+        self.assertEqual(self.sleeps, [1.0, 1.0])
+        self.assertEqual(len(self.ids()), len(self.api.listed))
 
     def test_full_sync_marks_individual_not_found_batch_result_for_removal(self):
         self.api.listed = ["gone"]

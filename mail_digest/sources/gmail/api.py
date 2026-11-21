@@ -10,6 +10,8 @@ import httplib2
 from google.auth.exceptions import TransportError
 from googleapiclient.errors import HttpError
 
+from ...config import GMAIL_BATCH_PAUSE_SECONDS, GMAIL_BATCH_SIZE
+
 
 class GmailApiError(RuntimeError):
     pass
@@ -24,10 +26,17 @@ class GmailHistoryExpired(GmailApiError):
 
 
 class GmailApi:
-    def __init__(self, service, max_attempts=3, sleep=time.sleep):
+    def __init__(
+        self,
+        service,
+        max_attempts=3,
+        sleep=time.sleep,
+        batch_pause_seconds=GMAIL_BATCH_PAUSE_SECONDS,
+    ):
         self.service = service
         self.max_attempts = max_attempts
         self.sleep = sleep
+        self.batch_pause_seconds = batch_pause_seconds
 
     @staticmethod
     def _status(exc):
@@ -65,12 +74,12 @@ class GmailApi:
         raise GmailApiError("Gmail API retry budget exhausted")
 
     def get_messages_batch(self, ids, format="full"):
-        """Fetch message groups of 50, retrying transient per-message errors singly."""
+        """Fetch configured message groups, retrying transient per-message errors singly."""
 
         message_ids = list(dict.fromkeys(ids))
         results = {}
-        for offset in range(0, len(message_ids), 50):
-            group = message_ids[offset:offset + 50]
+        for offset in range(0, len(message_ids), GMAIL_BATCH_SIZE):
+            group = message_ids[offset:offset + GMAIL_BATCH_SIZE]
             responses = {}
             failures = {}
 
@@ -120,6 +129,8 @@ class GmailApi:
                 except GmailNotFound as exc:
                     results[message_id] = exc
             results.update(responses)
+            if offset + GMAIL_BATCH_SIZE < len(message_ids):
+                self.sleep(self.batch_pause_seconds)
         return results
 
     def get_profile(self):

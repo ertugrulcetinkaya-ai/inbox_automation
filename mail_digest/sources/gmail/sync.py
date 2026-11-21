@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from ...config import GMAIL_BATCH_PAUSE_SECONDS, GMAIL_BATCH_SIZE
 from .api import GmailHistoryExpired, GmailNotFound
 from .mime import MessageStructureError, normalize_message
 from .store import RETENTION_VERSION
@@ -13,7 +14,7 @@ WINDOW_MS = 30 * 86400 * 1000
 CALENDAR_WINDOW_MS = 366 * 86400 * 1000
 FULL_SYNC_QUERIES = ("newer_than:31d", "newer_than:367d filename:ics")
 STAGE_BATCH_SIZE = 100
-FETCH_BATCH_SIZE = 50
+FETCH_BATCH_SIZE = GMAIL_BATCH_SIZE
 
 
 class GmailSyncError(RuntimeError):
@@ -59,11 +60,15 @@ class GmailSynchronizer:
         now_ms=None,
         max_full_attempts=2,
         stage_batch_size=STAGE_BATCH_SIZE,
+        sleep=time.sleep,
+        batch_pause_seconds=GMAIL_BATCH_PAUSE_SECONDS,
     ):
         self.api = api
         self.store = store
         self.now_ms = now_ms or (lambda: int(time.time() * 1000))
         self.max_full_attempts = max_full_attempts
+        self.sleep = sleep
+        self.batch_pause_seconds = batch_pause_seconds
         if stage_batch_size <= 0:
             raise ValueError("stage_batch_size must be positive")
         self.stage_batch_size = stage_batch_size
@@ -147,6 +152,8 @@ class GmailSynchronizer:
                             if len(snapshot_batch) >= self.stage_batch_size:
                                 self.store.stage_many(snapshot_batch)
                                 snapshot_batch = []
+                    if offset + FETCH_BATCH_SIZE < len(sorted_message_ids):
+                        self.sleep(self.batch_pause_seconds)
                 if snapshot_batch:
                     self.store.stage_many(snapshot_batch)
                 affected, new_history_id = _affected_ids(
