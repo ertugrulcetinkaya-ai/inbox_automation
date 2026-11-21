@@ -89,6 +89,7 @@ class FakeApi:
         self.history = {"100": [history_page("101")]}
         self.messages = {}
         self.get_calls = []
+        self.batch_calls = []
         self.history_calls = []
 
     def get_profile(self):
@@ -116,6 +117,17 @@ class FakeApi:
         if isinstance(value, Exception):
             raise value
         return value
+
+    def get_messages_batch(self, message_ids, format="full"):
+        message_ids = list(message_ids)
+        self.batch_calls.append((message_ids, format))
+        results = {}
+        for message_id in message_ids:
+            try:
+                results[message_id] = self.get_message(message_id, format=format)
+            except GmailNotFound as exc:
+                results[message_id] = exc
+        return results
 
     def get_attachment(self, message_id, attachment_id):
         raise AssertionError("unexpected attachment call")
@@ -179,6 +191,27 @@ class GmailSyncTests(unittest.TestCase):
             [2, 2, 1],
         )
         self.assertEqual(self.ids(), sorted(self.api.listed))
+        self.assertEqual(self.api.batch_calls, [(sorted(self.api.listed), "full")])
+
+    def test_full_sync_fetches_snapshot_in_batches_of_fifty(self):
+        self.api.listed = [f"message-{index:03d}" for index in range(101)]
+        self.api.messages = {
+            message_id: full_message(message_id) for message_id in self.api.listed
+        }
+
+        self.sync.full_sync()
+
+        self.assertEqual([len(ids) for ids, _format in self.api.batch_calls], [50, 50, 1])
+        self.assertEqual(len(self.ids()), 101)
+
+    def test_full_sync_marks_individual_not_found_batch_result_for_removal(self):
+        self.api.listed = ["gone"]
+        self.api.messages["gone"] = GmailNotFound("gone")
+
+        self.sync.full_sync()
+
+        self.assertEqual(self.ids(), [])
+        self.assertEqual(self.api.batch_calls, [(["gone"], "full")])
 
     def test_full_sync_initial_message_moved_out_is_removed(self):
         self.api.listed = ["moving"]

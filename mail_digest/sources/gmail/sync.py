@@ -13,6 +13,7 @@ WINDOW_MS = 30 * 86400 * 1000
 CALENDAR_WINDOW_MS = 366 * 86400 * 1000
 FULL_SYNC_QUERIES = ("newer_than:31d", "newer_than:367d filename:ics")
 STAGE_BATCH_SIZE = 100
+FETCH_BATCH_SIZE = 50
 
 
 class GmailSyncError(RuntimeError):
@@ -92,6 +93,11 @@ class GmailSynchronizer:
             message = self.api.get_message(message_id, format="full")
         except GmailNotFound:
             return "delete", message_id
+        return self._operation_for_message(message_id, message, cutoff_ms, calendar_cutoff_ms)
+
+    def _operation_for_message(self, message_id, message, cutoff_ms, calendar_cutoff_ms):
+        if not isinstance(message, dict):
+            raise GmailSyncError("Gmail returned an invalid message payload")
         if not self._is_current_inbox(message, None):
             return "delete", message_id
         record = self._normalize(message)
@@ -120,15 +126,27 @@ class GmailSynchronizer:
                     for query in FULL_SYNC_QUERIES
                     for message_id in self.api.iter_message_ids(query)
                 }
-                for message_id in sorted(message_ids):
-                    operation, payload = self._current_operation(
-                        message_id, cutoff_ms, calendar_cutoff_ms
+                sorted_message_ids = sorted(message_ids)
+                for offset in range(0, len(sorted_message_ids), FETCH_BATCH_SIZE):
+                    message_batch = sorted_message_ids[offset:offset + FETCH_BATCH_SIZE]
+                    batch_results = self.api.get_messages_batch(
+                        message_batch, format="full"
                     )
-                    if operation == "upsert":
-                        snapshot_batch.append(payload)
-                        if len(snapshot_batch) >= self.stage_batch_size:
-                            self.store.stage_many(snapshot_batch)
-                            snapshot_batch = []
+                    for message_id in message_batch:
+                        if message_id not in batch_results:
+                            raise GmailSyncError("Gmail batch response was incomplete")
+                        message = batch_results[message_id]
+                        if isinstance(message, GmailNotFound):
+                            operation, payload = "delete", message_id
+                        else:
+                            operation, payload = self._operation_for_message(
+                                message_id, message, cutoff_ms, calendar_cutoff_ms
+                            )
+                        if operation == "upsert":
+                            snapshot_batch.append(payload)
+                            if len(snapshot_batch) >= self.stage_batch_size:
+                                self.store.stage_many(snapshot_batch)
+                                snapshot_batch = []
                 if snapshot_batch:
                     self.store.stage_many(snapshot_batch)
                 affected, new_history_id = _affected_ids(

@@ -14,6 +14,7 @@
 - For Gmail, inspect ordinary messages from the last 30 days and retain calendar-payload (`raw_source`) messages for up to 366 days. Apple Mail rollback remains limited to 30 days.
 - Gmail cache retention version is 2. A missing or older/different version with a history checkpoint requires one full sync; the successful staging activation records version 2 atomically with the checkpoint.
 - Gmail history requests use only `messageAdded`, `messageDeleted`, `labelAdded`, and `labelRemoved` event types without a label filter. Skip uncached additions that are not in INBOX, apply message deletions directly to the local cache without fetching them, and preserve the final operation when history contains repeated changes to one ID.
+- Gmail full sync fetches snapshot messages in groups of 50. Per-message 404 results are treated as missing messages; transient 429, 5xx, and rate-limit responses are retried individually through the normal bounded backoff path.
 - `MAIL_SOURCE` defaults to `gmail`; use Apple Mail only when `MAIL_SOURCE=apple_mail` is explicitly set.
 - Never mark messages read or unread.
 - Never delete, move, archive, flag, reply, forward, label, or create drafts.
