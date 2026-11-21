@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from email.utils import parseaddr
@@ -48,24 +49,31 @@ def _status_label(status):
 
 def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurrence]:
     records = list(records)
+    parse_failures = {}
 
-    def parse_uncached():
-        return [
-            extract_meetings(
+    def parse_record(index, record):
+        try:
+            result = extract_meetings(
                 record,
                 start_date,
                 end_date,
                 include_cancelled=True,
                 include_lifecycle_outside_range=True,
             )
-            for record in records
-        ]
+        except Exception as exc:
+            parse_failures[index] = type(exc).__name__
+            return []
+        parse_failures.pop(index, None)
+        return result
+
+    def parse_uncached():
+        return [parse_record(index, record) for index, record in enumerate(records)]
 
     try:
         parsed_records = []
         pending = {}
         with ParseCache() as cache:
-            for record in records:
+            for index, record in enumerate(records):
                 key = cache_key(
                     record,
                     start_date,
@@ -75,19 +83,21 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
                 )
                 result = cache.get(key)
                 if result is None:
-                    result = extract_meetings(
-                        record,
-                        start_date,
-                        end_date,
-                        include_cancelled=True,
-                        include_lifecycle_outside_range=True,
-                    )
-                    pending[key] = result
+                    result = parse_record(index, record)
+                    if index not in parse_failures:
+                        pending[key] = result
                 parsed_records.append(result)
             cache.store(start_date, pending)
     except ParseCacheUnavailable:
         log("Meeting parse cache unavailable; parsing without cache")
         parsed_records = parse_uncached()
+
+    if parse_failures:
+        counts = Counter(parse_failures.values())
+        summary = ", ".join(
+            f"{error_type}={count}" for error_type, count in sorted(counts.items())
+        )
+        log(f"Meeting parse failures: {summary}")
 
     meetings = [meeting for parsed in parsed_records for meeting in parsed]
 

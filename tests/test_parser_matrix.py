@@ -1,7 +1,12 @@
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from main import extract_meeting, extract_meetings
+from mail_digest.services.meeting_service import build_digest_result
+from parse_cache_test_support import isolate_parse_cache
+
+isolate_parse_cache()
 
 
 def _record(content, received_date=date(2026, 8, 12), subject="Toplantı"):
@@ -33,6 +38,14 @@ DATE_CASES = [
     ("iso_numeric", "Meeting on 2026-08-15 at 11:00.", date(2026, 8, 15), date(2026, 8, 15)),
     ("turkish_day_month", "Toplantı 15 Ağustos saat 09:00'da.", date(2026, 8, 15), date(2026, 8, 15)),
     ("turkish_month_day", "Toplantı Ağustos 15 saat 09:00'da.", date(2026, 8, 15), date(2026, 8, 15)),
+    ("turkish_kasim_upper", "Toplantı 22 KASIM saat 14:00'da.", date(2026, 11, 22), date(2026, 11, 22)),
+    ("turkish_kasim_mixed", "Toplantı 22 Kasım saat 14:00'da.", date(2026, 11, 22), date(2026, 11, 22)),
+    ("ascii_kasim", "Toplantı 22 kasim saat 14:00'da.", date(2026, 11, 22), date(2026, 11, 22)),
+    ("ascii_subat", "Toplantı 22 subat saat 14:00'da.", date(2027, 2, 22), date(2027, 2, 22)),
+    ("ascii_agustos", "Toplantı 22 agustos saat 14:00'da.", date(2026, 8, 22), date(2026, 8, 22)),
+    ("ascii_eylul", "Toplantı 22 eylul saat 14:00'da.", date(2026, 9, 22), date(2026, 9, 22)),
+    ("ascii_aralik", "Toplantı 22 aralik saat 14:00'da.", date(2026, 12, 22), date(2026, 12, 22)),
+    ("ascii_mayis", "Toplantı 22 mayis saat 14:00'da.", date(2027, 5, 22), date(2027, 5, 22)),
     ("english_day_month", "Meeting on 15 August at 09:00.", date(2026, 8, 15), date(2026, 8, 15)),
     ("english_month_day", "Meeting on August 15 at 09:00.", date(2026, 8, 15), date(2026, 8, 15)),
     ("slash_day_month", "Toplantı 15/08 saat 09:00'da.", date(2026, 8, 15), date(2026, 8, 15)),
@@ -60,6 +73,7 @@ WEEKDAY_CASES = [
 
 SEMANTIC_CASES = [
     ("cancel_turkish", _record("15 Ağustos 2026 saat 10:00 toplantısı iptal edilmiştir."), date(2026, 8, 15), "none"),
+    ("cancel_turkish_upper", _record("22 KASIM saat 14:00 toplantı İPTAL EDİLDİ", received_date=date(2026, 11, 21)), date(2026, 11, 22), "none"),
     ("cancel_english", _record("The meeting on August 15, 2026 at 10:00 AM was cancelled."), date(2026, 8, 15), "none"),
     ("canceled_english", _record("The meeting on August 15, 2026 at 10:00 AM was canceled."), date(2026, 8, 15), "none"),
     ("reschedule_turkish", _record("15 Ağustos toplantımız 18 Ağustos 14:00'e ertelendi."), date(2026, 8, 18), {"date": date(2026, 8, 18), "time": "14:00", "status": "RESCHEDULED"}),
@@ -78,6 +92,63 @@ SEMANTIC_CASES = [
 
 class ParserMatrixTests(unittest.TestCase):
     pass
+
+
+class TurkishCaseRegressionTests(unittest.TestCase):
+    def test_uppercase_tomorrow_uses_received_date_for_daily_digest(self):
+        record = _record(
+            "YARIN saat 10:00'da toplantı var.",
+            received_date=date(2026, 11, 21),
+        )
+
+        result = build_digest_result(
+            [record], "daily", target_date=date(2026, 11, 22)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("10:00", result.message)
+
+    def test_uppercase_month_and_valid_record_both_render_in_daily_digest(self):
+        upper_month = _record(
+            "22 KASIM saat 14:00 toplantısı.",
+            received_date=date(2026, 11, 21),
+        )
+        valid = _record(
+            "22 Kasım saat 15:00 toplantısı.",
+            received_date=date(2026, 11, 21),
+        )
+
+        result = build_digest_result(
+            [upper_month, valid], "daily", target_date=date(2026, 11, 22)
+        )
+
+        self.assertEqual(result.count, 2)
+        self.assertIn("14:00", result.message)
+        self.assertIn("15:00", result.message)
+
+    def test_one_record_parse_error_does_not_hide_a_valid_record(self):
+        records = [
+            {"subject": "bad synthetic record", "content": "bad"},
+            {"subject": "valid synthetic record", "content": "valid"},
+        ]
+        valid_meeting = {
+            "subject": "Valid synthetic meeting",
+            "sender": "Fixture Organizer <organizer@example.com>",
+            "date": date(2026, 11, 22),
+            "time": "10:00",
+            "sort_minutes": 600,
+        }
+
+        with patch(
+            "mail_digest.services.meeting_service.extract_meetings",
+            side_effect=[ValueError("synthetic parser failure"), [valid_meeting]],
+        ):
+            result = build_digest_result(
+                records, "daily", target_date=date(2026, 11, 22)
+            )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("Valid synthetic meeting", result.message)
 
 
 def _time_test(case):

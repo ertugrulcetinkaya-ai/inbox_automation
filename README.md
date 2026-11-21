@@ -241,6 +241,9 @@ Gmail MIME gövdeleri bounded policy ile işlenir (`MAX_BODY_BYTES=256 KiB`, `MA
 Semantic body-only toplantılarda tarih ve saat birlikte aranır. Bunun istisnası,
 aynı tarih bağlamında açık toplantı ve iptal ifadesi bulunan date-only semantic
 cancellation'dır: eski davetin saati korunarak lifecycle eşleştirmesine bırakılır.
+Türkçe ay ve göreli tarih adları büyük/küçük harf duyarsızdır; ay adlarının ASCII
+varyantları da tanınır. Bir kaydın parser hatası diğer kayıtları durdurmaz; digest
+yalnızca hata sınıfı sayaçlarını loglar.
 ICS motoru recurring master davetlerini yalnızca istenen aralık için açar; günlük,
 haftalık ve gelecek görünümleri kendi aralıklarıyla sınırlıdır. Seri ana iptali
 eşit veya daha yüksek `SEQUENCE` ile tüm occurrence'ları bastırır;

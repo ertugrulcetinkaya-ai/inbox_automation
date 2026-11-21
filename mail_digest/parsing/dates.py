@@ -16,7 +16,25 @@ from ..config import (
 from ..utils import sanitize
 
 
-MONTH_PATTERN = "|".join(sorted(MONTHS, key=len, reverse=True))
+_TURKISH_ASCII = str.maketrans({"ı": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c"})
+
+
+def turkish_fold(text: str) -> str:
+    """Normalize Turkish casing without losing dotted and dotless I."""
+
+    return text.translate(str.maketrans({"I": "ı", "İ": "i"})).lower()
+
+
+def _ascii_fold(text: str) -> str:
+    return turkish_fold(text).translate(_TURKISH_ASCII)
+
+
+MONTH_LOOKUP = {}
+for _name, _month in MONTHS.items():
+    MONTH_LOOKUP[turkish_fold(_name)] = _month
+    MONTH_LOOKUP[_ascii_fold(_name)] = _month
+
+MONTH_PATTERN = "|".join(sorted(MONTH_LOOKUP, key=len, reverse=True))
 
 ISO_DATE_RE = re.compile(
     r"(?<!\d)(?P<year>20\d{2})[./-](?P<month>\d{1,2})[./-](?P<day>\d{1,2})(?!\d)"
@@ -85,7 +103,7 @@ def _resolve_yearless_date(month, day, target_date):
 def _resolve_weekday_date(weekday, relative_date, prefix=""):
     """Resolve a weekday to the next practical occurrence."""
     days_until = (weekday - relative_date.weekday()) % 7
-    if prefix.casefold() in {"önümüzdeki", "onumuzdeki", "gelecek", "next"} and days_until == 0:
+    if turkish_fold(prefix) in {"önümüzdeki", "onumuzdeki", "gelecek", "next"} and days_until == 0:
         days_until = 7
     return relative_date + timedelta(days=days_until)
 
@@ -166,20 +184,26 @@ def _date_hits(
     for match in DAY_MONTH_DATE_RE.finditer(text):
         if is_time_hour_suffix(match):
             continue
+        month = MONTH_LOOKUP.get(turkish_fold(match.group("month")))
+        if month is None:
+            continue
         add_hit(
             match,
             match.group("year"),
-            MONTHS[match.group("month").casefold()],
+            month,
             match.group("day"),
         )
 
     for match in MONTH_DAY_DATE_RE.finditer(text):
         if is_time_hour_suffix(match):
             continue
+        month = MONTH_LOOKUP.get(turkish_fold(match.group("month")))
+        if month is None:
+            continue
         add_hit(
             match,
             match.group("year"),
-            MONTHS[match.group("month").casefold()],
+            month,
             match.group("day"),
         )
 
@@ -199,7 +223,7 @@ def _date_hits(
     for match in RELATIVE_DATE_RE.finditer(text):
         if relative_anchor is None:
             continue
-        word = match.group(1).casefold()
+        word = turkish_fold(match.group(1))
         resolved_date = (
             relative_anchor + timedelta(days=1)
             if word in {"tomorrow", "yarın"}
@@ -210,7 +234,9 @@ def _date_hits(
     for match in WEEKDAY_RE.finditer(text):
         if relative_anchor is None:
             continue
-        weekday = WEEKDAY_NAMES[match.group("weekday").casefold()]
+        weekday = WEEKDAY_NAMES.get(turkish_fold(match.group("weekday")))
+        if weekday is None:
+            continue
         resolved_date = _resolve_weekday_date(
             weekday,
             relative_anchor,
