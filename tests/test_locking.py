@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,54 @@ class DigestLockTests(unittest.TestCase):
                     with digest_lock(lock_path, wait_seconds=0.55):
                         self.fail("busy lock was acquired")
                 self.assertGreaterEqual(time.monotonic() - started, 0.5)
+
+    @patch("mail_digest.cli._run_digest", return_value=0)
+    def test_scheduled_digest_waits_for_lock_and_records_separately(self, _run):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock_path = root / "digest.lock"
+            status_path = root / "status.json"
+            results = []
+
+            def scheduled_caller():
+                results.append(run_digest(scheduled=True))
+
+            with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+                "mail_digest.cli.daily_lock_wait_seconds", return_value=2.0
+            ), patch.dict(os.environ, {"MAIL_DIGEST_STATUS_FILE": str(status_path)}):
+                with digest_lock(lock_path):
+                    thread = threading.Thread(target=scheduled_caller)
+                    thread.start()
+                    time.sleep(0.6)
+
+                thread.join(timeout=3)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(results, [0])
+            modes = json.loads(status_path.read_text(encoding="utf-8"))["modes"]
+            self.assertIn("daily_scheduled", modes)
+            self.assertNotIn("daily", modes)
+            self.assertIsNotNone(modes["daily_scheduled"]["last_success_at"])
+
+    @patch("mail_digest.cli._run_digest", return_value=0)
+    def test_scheduled_digest_timeout_records_skipped_lock_and_exit_75(self, _run):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock_path = root / "digest.lock"
+            status_path = root / "status.json"
+            with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+                "mail_digest.cli.daily_lock_wait_seconds", return_value=0
+            ), patch.dict(os.environ, {"MAIL_DIGEST_STATUS_FILE": str(status_path)}):
+                with digest_lock(lock_path):
+                    self.assertEqual(run_digest(scheduled=True), 75)
+
+            entry = json.loads(status_path.read_text(encoding="utf-8"))["modes"][
+                "daily_scheduled"
+            ]
+            self.assertEqual(entry["last_error_type"], "skipped_lock")
+            self.assertEqual(entry["last_skipped_lock_at"], entry["last_failure_at"])
+            self.assertIsNone(entry["last_started_at"])
+            _run.assert_not_called()
 
     def test_leftover_lock_file_does_not_block_a_new_run(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -151,6 +200,18 @@ except DigestAlreadyRunning:
                 self.assertEqual(main(), 0)
                 run.assert_called_once_with(dry_run=True, mode=mode)
                 run.reset_mock()
+
+    @patch("mail_digest.cli.rotate_logs")
+    @patch("mail_digest.cli.run_digest", return_value=0)
+    def test_cli_routes_scheduled_daily_flag(self, run, _rotate):
+        with patch.object(sys, "argv", ["main.py", "--scheduled"]):
+            self.assertEqual(main(), 0)
+
+        run.assert_called_once_with(
+            upcoming=False,
+            dry_run=False,
+            scheduled=True,
+        )
 
 
 class TelegramListenerLockIntegrationTests(unittest.TestCase):

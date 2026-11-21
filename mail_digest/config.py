@@ -45,6 +45,7 @@ REMINDER_STATE_FILE = Path(
 ).expanduser()
 REMINDER_MINUTES_DEFAULT = 15
 REMINDER_WINDOW_MINUTES_DEFAULT = 5
+DAILY_LOCK_WAIT_SECONDS_DEFAULT = 300.0
 ATTENTION_CONFIDENCE_THRESHOLD = 0.80
 MAIL_SOURCE_DEFAULT = "gmail"
 GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
@@ -233,6 +234,13 @@ def reminder_window_minutes():
     return _positive_int_env(
         "MEETING_REMINDER_WINDOW_MINUTES",
         REMINDER_WINDOW_MINUTES_DEFAULT,
+    )
+
+
+def daily_lock_wait_seconds():
+    return _nonnegative_float_env(
+        "MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS",
+        DAILY_LOCK_WAIT_SECONDS_DEFAULT,
     )
 
 

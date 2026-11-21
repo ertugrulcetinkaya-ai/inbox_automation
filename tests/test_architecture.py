@@ -178,6 +178,13 @@ class ArchitectureTests(unittest.TestCase):
                     template["EnvironmentVariables"].get("PYTHONUNBUFFERED"), "1"
                 )
 
+    def test_install_launchd_renders_scheduled_daily_argument(self):
+        from scripts.install_launchd import TEMPLATES, render_template
+
+        rendered = plistlib.loads(render_template(TEMPLATES["summary"]))
+
+        self.assertIn("--scheduled", rendered["ProgramArguments"])
+
     def test_listener_print_calls_flush_stdout(self):
         project_root = Path(main.__file__).parent
         listener_path = project_root / "telegram_listener.py"

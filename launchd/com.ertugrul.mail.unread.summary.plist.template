@@ -9,6 +9,7 @@
     <array>
         <string>__PYTHON_PATH__</string>
         <string>__PROJECT_ROOT__/main.py</string>
+        <string>--scheduled</string>
     </array>
 
     <key>WorkingDirectory</key>
