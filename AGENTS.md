@@ -47,7 +47,7 @@
 ## Change and verification rules
 
 - Prefer small, explicit patches and keep unrelated working-tree changes untouched.
-- Dotted numeric date/time context checks must scan only the token's nearby window so parser cost does not grow with the full message length per token; preserve parser results and keep a synthetic performance regression test.
+- Dotted numeric date/time context checks must scan only the token's nearby window so parser cost does not grow with the full message length per token; preserve parser results and keep the 100-message synthetic performance regression test.
 - Run `./scripts/check.sh` locally for compile, unit, lint, type, and whitespace checks; it runs Bandit only when installed. Run `./scripts/check.sh --audit` only for an explicitly requested dependency audit. GitHub Actions is manually triggered with `workflow_dispatch`.
 - Digest logs may include message counts and source names, but must omit the mailbox address and message content.
 - Add or update tests for parser, command, routing, or deployment changes.

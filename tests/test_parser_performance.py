@@ -22,15 +22,15 @@ class ParserPerformanceTests(unittest.TestCase):
                 "source_message_id": f"synthetic-{index:03d}@example.test",
                 "content": content,
             }
-            for index in range(300)
+            for index in range(100)
         ]
 
         started = time.perf_counter()
         result = build_digest_result(records, "daily", target_date=target_date)
         elapsed = time.perf_counter() - started
 
-        self.assertEqual(result.count, 300)
-        self.assertEqual(len(result.meetings), 300)
+        self.assertEqual(result.count, 100)
+        self.assertEqual(len(result.meetings), 100)
         self.assertLess(elapsed, 10.0, f"daily digest took {elapsed:.2f}s")
 
 

@@ -198,6 +198,6 @@ source .venv/bin/activate
 
 Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixture'ları ve dış sistem hata akışlarını içerir. `tests/fixtures/` altında kişisel veri içermeyen 20 örnek bulunur; AppleScript timeout/bozuk çıktı, Telegram HTTP veya `ok:false` cevabı, 10.30/09.30/14.30 saatleri, tarih biçimleri, yıl geçişi, hafta günleri, quoted reply, iptal, erteleme ve çoklu tarih senaryoları test edilir.
 
-Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 300 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular; `python scripts/bench_parser.py` daily, weekly, upcoming ve reminder parser sürelerini ölçer.
+Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular; `python scripts/bench_parser.py` daily, weekly, upcoming ve reminder parser sürelerini ölçer.
 
 Mail erişimi ve Telegram gönderimi salt-okunur operasyon mantığıyla tasarlanmıştır: mesaj silme, taşıma, işaretleme, cevaplama, yönlendirme veya taslak oluşturma yapılmaz.
