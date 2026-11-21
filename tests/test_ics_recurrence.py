@@ -134,6 +134,87 @@ class ICSRecurrenceTests(unittest.TestCase):
         self.assertIn("11:00", result.message)
         self.assertNotIn("10:00", result.message)
 
+    def _berlin_series(self):
+        return event(
+            start="DTSTART;TZID=Europe/Berlin:20261106T090000",
+            recurrence="RRULE:FREQ=WEEKLY;BYDAY=FR",
+        )
+
+    def _berlin_override(self, recurrence_id):
+        return event(
+            sequence=1,
+            start="DTSTART;TZID=Europe/Istanbul:20261120T150000",
+            recurrence_id=recurrence_id,
+        )
+
+    def test_utc_recurrence_id_replaces_occurrence_in_same_message(self):
+        recurring = record(
+            self._berlin_series(),
+            self._berlin_override("RECURRENCE-ID:20261120T080000Z"),
+        )
+
+        result = build_digest_result(
+            [recurring], "daily", target_date=date(2026, 11, 20)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("15:00", result.message)
+        self.assertNotIn("11:00", result.message)
+
+    def test_utc_recurrence_id_replaces_occurrence_across_messages(self):
+        master = record(self._berlin_series())
+        master["source_message_id"] = "synthetic-master@example.test"
+        update = record(
+            self._berlin_override("RECURRENCE-ID:20261120T080000Z")
+        )
+        update["source_message_id"] = "synthetic-update@example.test"
+
+        result = build_digest_result(
+            [master, update], "daily", target_date=date(2026, 11, 20)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("15:00", result.message)
+        self.assertNotIn("11:00", result.message)
+
+    def test_recurrence_id_in_other_timezone_matches_same_instant(self):
+        recurring = record(
+            self._berlin_series(),
+            self._berlin_override(
+                "RECURRENCE-ID;TZID=America/New_York:20261120T030000"
+            ),
+        )
+
+        result = build_digest_result(
+            [recurring], "daily", target_date=date(2026, 11, 20)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("15:00", result.message)
+        self.assertNotIn("11:00", result.message)
+
+    def test_all_day_occurrence_update_uses_date_identity(self):
+        recurring = record(
+            event(
+                start="DTSTART;VALUE=DATE:20261106",
+                recurrence="RRULE:FREQ=WEEKLY;BYDAY=FR",
+            ),
+            event(
+                sequence=1,
+                start="DTSTART;VALUE=DATE:20261120",
+                recurrence_id="RECURRENCE-ID;VALUE=DATE:20261120",
+                title="Updated all-day meeting",
+            ),
+        )
+
+        result = build_digest_result(
+            [recurring], "daily", target_date=date(2026, 11, 20)
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertIn("Updated all-day meeting", result.message)
+        self.assertNotIn("Synthetic recurring meeting", result.message)
+
     def test_series_cancellation_suppresses_all_occurrences(self):
         master = friday_series()
         for sequence in (0, 1):

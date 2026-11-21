@@ -27,6 +27,7 @@
 - Normalize lifecycle state to `CONFIRMED`, `CANCELLED`, `RESCHEDULED`, or `TENTATIVE`; never list cancelled events, and never leave the old date of a rescheduled event active.
 - For repeated ICS events, resolve by `UID` and highest `SEQUENCE`; `METHOD:CANCEL` takes precedence at equal sequence.
 - Expand recurring ICS masters with `RRULE` and `RDATE` in the requested range, remove `EXDATE`, preserve event timezone/DST, and cap each series at 500 occurrences. Match instance updates by `UID + RECURRENCE-ID`; equal-or-higher sequence master cancellations suppress the series.
+- Normalize recurrence identities in one shared helper: aware datetimes use UTC ISO form, floating datetimes are interpreted in Europe/Istanbul then converted to UTC, and all-day dates use ISO date form.
 - Preserve ICS line folding and MIME source in the AppleScript/Python transport; never collapse calendar content into one whitespace-normalized line.
 - Keep daily output limited to meetings scheduled for the current day.
 - Keep upcoming output inclusive of today and later parsed meetings.

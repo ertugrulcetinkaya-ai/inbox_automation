@@ -11,7 +11,7 @@ from email.parser import Parser
 
 from dateutil.rrule import rrulestr
 
-from ..config import ICS_MARKERS, local_now
+from ..config import ICS_MARKERS, LOCAL_TIMEZONE_NAME, local_now
 from ..models import Meeting
 from ..utils import record_source_received_at
 from .dates import parse_received_date
@@ -158,6 +158,22 @@ def _normalize_ics_status(status, calendar_method):
     return "CONFIRMED"
 
 
+def recurrence_identity(recurrence_id):
+    """Normalize a recurrence id to a stable UTC instant or all-day date."""
+
+    if isinstance(recurrence_id, datetime):
+        if recurrence_id.tzinfo is None or recurrence_id.utcoffset() is None:
+            recurrence_id = recurrence_id.replace(
+                tzinfo=ZoneInfo(LOCAL_TIMEZONE_NAME)
+                if ZoneInfo is not None
+                else dt_timezone.utc
+            )
+        return recurrence_id.astimezone(dt_timezone.utc).isoformat()
+    if isinstance(recurrence_id, date):
+        return recurrence_id.isoformat()
+    return ""
+
+
 def _ics_event_key(meeting):
     """Return the lifecycle key for an ICS event.
 
@@ -166,12 +182,7 @@ def _ics_event_key(meeting):
     retain the UID-only identity used by calendar producers.
     """
 
-    recurrence_id = meeting.recurrence_id
-    if isinstance(recurrence_id, datetime):
-        recurrence_id = recurrence_id.isoformat()
-    elif isinstance(recurrence_id, date):
-        recurrence_id = recurrence_id.isoformat()
-    return meeting.uid, recurrence_id or ""
+    return meeting.uid, recurrence_identity(meeting.recurrence_id)
 
 
 def _ics_status_priority(status):

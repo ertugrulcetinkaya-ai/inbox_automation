@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import ATTENTION_CONFIDENCE_THRESHOLD, LOCAL_TIMEZONE_NAME, local_now
 from ..models import MeetingOccurrence
+from ..parsing.ics import recurrence_identity
 from ..parsing.meeting_parser import extract_meetings
 from ..utils import record_source_received_at
 
@@ -154,9 +155,7 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
     def event_key(meeting):
         uid = meeting.get("uid", "")
         recurrence_id = meeting.get("recurrence_id")
-        if isinstance(recurrence_id, (date, datetime)):
-            recurrence_id = recurrence_id.isoformat()
-        return uid, recurrence_id or ""
+        return uid, recurrence_identity(recurrence_id)
 
     def freshness_key(meeting):
         received_at = record_source_received_at(meeting)
