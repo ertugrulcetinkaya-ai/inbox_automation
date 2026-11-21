@@ -11,7 +11,7 @@
 ## Mail and privacy rules
 
 - Read only the `ertugrul@cetinkayalar.com` account's primary Inbox.
-- Inspect at most the last 30 days of messages.
+- For Gmail, inspect ordinary messages from the last 30 days and retain calendar-payload (`raw_source`) messages for up to 366 days. Apple Mail rollback remains limited to 30 days.
 - Never mark messages read or unread.
 - Never delete, move, archive, flag, reply, forward, label, or create drafts.
 - Never print Telegram bot tokens, credentials, full private message bodies, or other secrets in logs, tests, commits, or user-facing output.

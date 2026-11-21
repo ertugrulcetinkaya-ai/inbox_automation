@@ -10,7 +10,7 @@ This is a standalone inbox automation project. The official read-only Gmail API 
 - Gmail maintains a normalized SQLite cache under `~/.hermes_local_automation/gmail/` by default. Full sync uses a pre-snapshot history boundary, staging, history reconciliation, and atomic cache/checkpoint activation; later runs use exact Gmail history change arrays and current-message state.
 - SCOPE: Only the account configured with `ertugrul@cetinkayalar.com` is included.
 - SCOPE: Only the primary inbox is included. Mailboxes must be named exactly "INBOX" or "Inbox". All other folders are excluded.
-- Messages received in the last 30 days are inspected; read status does not matter.
+- Gmail retains ordinary messages for 30 days and messages with a calendar payload in `raw_source` for up to 366 days. The Apple Mail rollback adapter remains limited to 30 days; read status does not matter.
 - Likely meeting/calendar messages are parsed for Turkish and English date/time formats.
 - ICS-first parsing is mandatory: parse inline `VCALENDAR/VEVENT` and MIME `text/calendar`/`.ics` parts before semantic text fallback.
 - Non-ICS semantic candidates require a second deterministic context review. A strong meeting subject may support an all-day event; ordinary body-only candidates require a nearby meeting expression, date, and time. A body-only cancellation is accepted without a time only when the same date context contains an explicit meeting and cancellation expression, so it can suppress the old timed invitation. Quoted `From/Sent/Subject` thread blocks and unrelated report dates must not become meetings. Verified low-confidence meetings remain visible in the attention output rather than being silently filtered.

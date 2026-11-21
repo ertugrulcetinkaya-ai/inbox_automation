@@ -9,6 +9,8 @@ from .mime import MessageStructureError, normalize_message
 
 
 WINDOW_MS = 30 * 86400 * 1000
+CALENDAR_WINDOW_MS = 366 * 86400 * 1000
+FULL_SYNC_QUERIES = ("newer_than:31d", "newer_than:367d filename:ics")
 STAGE_BATCH_SIZE = 100
 
 
@@ -76,21 +78,31 @@ class GmailSynchronizer:
         labels = message.get("labelIds")
         if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
             raise MessageStructureError("invalid labelIds")
-        return "INBOX" in labels and internal_date_ms >= cutoff_ms
+        return "INBOX" in labels and (
+            cutoff_ms is None or internal_date_ms >= cutoff_ms
+        )
 
-    def _current_operation(self, message_id, cutoff_ms):
+    def _current_operation(self, message_id, cutoff_ms, calendar_cutoff_ms):
         try:
             message = self.api.get_message(message_id, format="full")
         except GmailNotFound:
             return "delete", message_id
-        if not self._is_current_inbox(message, cutoff_ms):
+        if not self._is_current_inbox(message, None):
             return "delete", message_id
-        return "upsert", self._normalize(message)
+        record = self._normalize(message)
+        retention_cutoff_ms = (
+            calendar_cutoff_ms if record.get("raw_source") else cutoff_ms
+        )
+        if int(record["internal_date_ms"]) < retention_cutoff_ms:
+            return "delete", message_id
+        return "upsert", record
 
     def full_sync(self):
         last_expired = None
         for _attempt in range(self.max_full_attempts):
-            cutoff_ms = self.now_ms() - WINDOW_MS
+            now_ms = self.now_ms()
+            cutoff_ms = now_ms - WINDOW_MS
+            calendar_cutoff_ms = now_ms - CALENDAR_WINDOW_MS
             profile = self.api.get_profile()
             start_history_id = profile.get("historyId")
             if not start_history_id:
@@ -98,8 +110,15 @@ class GmailSynchronizer:
             self.store.clear_staging()
             try:
                 snapshot_batch = []
-                for message_id in self.api.iter_message_ids():
-                    operation, payload = self._current_operation(message_id, cutoff_ms)
+                message_ids = {
+                    message_id
+                    for query in FULL_SYNC_QUERIES
+                    for message_id in self.api.iter_message_ids(query)
+                }
+                for message_id in sorted(message_ids):
+                    operation, payload = self._current_operation(
+                        message_id, cutoff_ms, calendar_cutoff_ms
+                    )
                     if operation == "upsert":
                         snapshot_batch.append(payload)
                         if len(snapshot_batch) >= self.stage_batch_size:
@@ -113,7 +132,9 @@ class GmailSynchronizer:
                 affected_batch = []
                 deleted_batch = []
                 for message_id in sorted(affected):
-                    operation, payload = self._current_operation(message_id, cutoff_ms)
+                    operation, payload = self._current_operation(
+                        message_id, cutoff_ms, calendar_cutoff_ms
+                    )
                     if operation == "upsert":
                         affected_batch.append(payload)
                         if len(affected_batch) >= self.stage_batch_size:
@@ -131,7 +152,9 @@ class GmailSynchronizer:
                 # Each staging transaction is bounded and contains no Gmail
                 # request. The active cache/checkpoint still change together
                 # only after the complete network reconciliation succeeds.
-                self.store.activate_staging(new_history_id, cutoff_ms)
+                self.store.activate_staging(
+                    new_history_id, cutoff_ms, calendar_cutoff_ms
+                )
                 return
             except GmailHistoryExpired as exc:
                 last_expired = exc
@@ -140,7 +163,9 @@ class GmailSynchronizer:
         raise GmailSyncError("Gmail history expired repeatedly during full sync") from last_expired
 
     def incremental_sync(self, checkpoint):
-        cutoff_ms = self.now_ms() - WINDOW_MS
+        now_ms = self.now_ms()
+        cutoff_ms = now_ms - WINDOW_MS
+        calendar_cutoff_ms = now_ms - CALENDAR_WINDOW_MS
         try:
             affected, new_history_id = _affected_ids(
                 self.api.iter_history(str(checkpoint))
@@ -149,10 +174,12 @@ class GmailSynchronizer:
             self.full_sync()
             return
         operations = [
-            self._current_operation(message_id, cutoff_ms)
+            self._current_operation(message_id, cutoff_ms, calendar_cutoff_ms)
             for message_id in sorted(affected)
         ]
-        self.store.apply_incremental(operations, new_history_id, cutoff_ms)
+        self.store.apply_incremental(
+            operations, new_history_id, cutoff_ms, calendar_cutoff_ms
+        )
 
     def sync(self):
         checkpoint = self.store.checkpoint()

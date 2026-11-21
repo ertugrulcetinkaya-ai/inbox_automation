@@ -2,7 +2,7 @@
 
 `inbox_automation`, `ertugrul@cetinkayalar.com` hesabının üretim Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Apple Mail yalnızca rollback kaynağı olarak korunur. Üretim launchd ortamı `MAIL_SOURCE=gmail` kullanır; ortam değişkeni yoksa kodun güvenli yerel varsayılanı `apple_mail` olarak kalır.
 
-Proje şu anda yalnızca hedef hesabın birincil gelen kutusunu ve son 30 gündeki mesajları inceler. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
+Proje yalnızca hedef hesabın birincil gelen kutusunu inceler. Gmail'de normal mesajlar 30 gün, takvim payload'ı (`raw_source`) bulunan mesajlar 366 gün saklanır; Apple Mail rollback yolu 30 günle sınırlıdır. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
 
 ## Ne yapar?
 
@@ -68,7 +68,7 @@ Telegram özetleri 3.500 karakterlik parçalara ayrılır. Parçalar satır sonl
 ### ICS-first veri akışı
 
 ```text
-Gmail API production kaynağı veya Apple Mail rollback kaynağı (son 30 gün)
+Gmail API production kaynağı (normal mesajlar 30 gün, takvim payload'ı 366 gün) veya Apple Mail rollback kaynağı (30 gün)
    ↓
 her mesajın gövdesi + takvim sinyali olanlarda raw MIME source
    ↓

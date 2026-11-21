@@ -116,16 +116,14 @@ class GmailStore:
                 ((message_id,) for message_id in message_ids),
             )
 
-    def activate_staging(self, history_id, cutoff_ms):
+    def activate_staging(self, history_id, cutoff_ms, calendar_cutoff_ms):
         with self.connection:
             self.connection.execute("DELETE FROM messages")
             self.connection.execute(
                 f"INSERT INTO messages ({','.join(MESSAGE_COLUMNS)}) "
                 f"SELECT {','.join(MESSAGE_COLUMNS)} FROM staging_messages"
             )
-            self.connection.execute(
-                "DELETE FROM messages WHERE internal_date_ms < ?", (cutoff_ms,)
-            )
+            self._prune_messages(cutoff_ms, calendar_cutoff_ms)
             self.connection.execute(
                 "INSERT INTO metadata(key, value) VALUES('history_id', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -138,7 +136,7 @@ class GmailStore:
             )
             self.connection.execute("DELETE FROM staging_messages")
 
-    def apply_incremental(self, operations, history_id, cutoff_ms):
+    def apply_incremental(self, operations, history_id, cutoff_ms, calendar_cutoff_ms):
         with self.connection:
             for operation, payload in operations:
                 if operation == "upsert":
@@ -147,9 +145,7 @@ class GmailStore:
                     self.connection.execute(
                         "DELETE FROM messages WHERE gmail_message_id=?", (payload,)
                     )
-            self.connection.execute(
-                "DELETE FROM messages WHERE internal_date_ms < ?", (cutoff_ms,)
-            )
+            self._prune_messages(cutoff_ms, calendar_cutoff_ms)
             self.connection.execute(
                 "INSERT INTO metadata(key, value) VALUES('history_id', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -160,6 +156,14 @@ class GmailStore:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (str(int(time.time() * 1000)),),
             )
+
+    def _prune_messages(self, cutoff_ms, calendar_cutoff_ms):
+        self.connection.execute(
+            "DELETE FROM messages WHERE "
+            "(raw_source = '' AND internal_date_ms < ?) OR "
+            "(raw_source <> '' AND internal_date_ms < ?)",
+            (cutoff_ms, calendar_cutoff_ms),
+        )
 
     def records(self):
         rows = self.connection.execute(
