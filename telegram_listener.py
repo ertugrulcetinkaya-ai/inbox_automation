@@ -28,6 +28,7 @@ MAX_UPDATE_ATTEMPTS = 3
 LISTENER_CONFLICT_BACKOFF_SECONDS = 300
 POLL_BACKOFF_INITIAL_SECONDS = 5
 POLL_BACKOFF_MAX_SECONDS = 60
+LISTENER_LOG_ROTATION_INTERVAL_SECONDS = 60 * 60
 DONE = "DONE"
 RETRY = "RETRY"
 FAILED = "FAILED"
@@ -52,6 +53,14 @@ def _listener_conflict_backoff_seconds():
         return max(0, int(configured))
     except ValueError:
         return LISTENER_CONFLICT_BACKOFF_SECONDS
+
+
+def _rotate_listener_logs_if_due(last_rotation_at, now=None):
+    current = time.monotonic() if now is None else now
+    if current - last_rotation_at < LISTENER_LOG_ROTATION_INTERVAL_SECONDS:
+        return last_rotation_at
+    rotate_logs(PROJECT_ROOT / "logs", names=LISTENER_LOG_NAMES)
+    return current
 
 
 def _run_company_report_command(text):
@@ -364,6 +373,7 @@ def process_update(
 
 def main():
     rotate_logs(PROJECT_ROOT / "logs", names=LISTENER_LOG_NAMES)
+    last_log_rotation_at = time.monotonic()
     print("Starting Telegram Mail Listener...", flush=True)
     token = None
     try:
@@ -389,6 +399,7 @@ def main():
         offset = 0
         poll_backoff = POLL_BACKOFF_INITIAL_SECONDS
         while True:
+            last_log_rotation_at = _rotate_listener_logs_if_due(last_log_rotation_at)
             url = f"https://api.telegram.org/bot{token}/getUpdates"
             params = {"offset": offset, "timeout": 30}
             try:

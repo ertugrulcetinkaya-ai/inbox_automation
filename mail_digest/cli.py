@@ -19,7 +19,7 @@ from .services.meeting_service import (
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
 from .services.health import build_status_report
-from .services.log_rotation import CLI_LOG_NAMES, rotate_logs
+from .services.log_rotation import log_names_for_mode, rotate_logs
 from .services.reminder_state import (
     load_last_successful_reminder_scan,
     load_sent_reminders,
@@ -153,6 +153,10 @@ def run_digest(
     lock_wait = daily_lock_wait_seconds() if scheduled else wait_seconds
     try:
         with digest_lock(wait_seconds=lock_wait):
+            rotate_logs(
+                PROJECT_ROOT / "logs",
+                names=log_names_for_mode(status_mode),
+            )
             if not dry_run:
                 record_run_started(status_mode)
             kwargs = {"upcoming": upcoming, "dry_run": dry_run}
@@ -185,7 +189,6 @@ def run_digest(
 
 
 def main():
-    rotate_logs(PROJECT_ROOT / "logs", names=CLI_LOG_NAMES)
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fetch and format but do not send")
     parser.add_argument(

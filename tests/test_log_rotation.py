@@ -7,7 +7,14 @@ import plistlib
 from unittest.mock import patch
 
 from mail_digest.config import PROJECT_ROOT
-from mail_digest.services.log_rotation import CLI_LOG_NAMES, LISTENER_LOG_NAMES, rotate_logs
+from mail_digest.services.log_rotation import (
+    CLI_LOG_NAMES,
+    DAILY_LOG_NAMES,
+    LISTENER_LOG_NAMES,
+    REMINDER_LOG_NAMES,
+    log_names_for_mode,
+    rotate_logs,
+)
 
 
 class LogRotationTests(unittest.TestCase):
@@ -22,7 +29,8 @@ class LogRotationTests(unittest.TestCase):
 
             rotate_logs(directory, max_bytes=1, keep=3)
 
-            self.assertFalse(log_path.exists())
+            self.assertTrue(log_path.exists())
+            self.assertEqual(log_path.read_text(encoding="utf-8"), "")
             self.assertEqual(Path(f"{log_path}.1").read_text(encoding="utf-8"), "current data")
             self.assertEqual(Path(f"{log_path}.2").read_text(encoding="utf-8"), "archive one")
             self.assertEqual(Path(f"{log_path}.3").read_text(encoding="utf-8"), "archive two")
@@ -48,7 +56,8 @@ class LogRotationTests(unittest.TestCase):
             rotate_logs(directory, names=CLI_LOG_NAMES, max_bytes=1)
 
             for name in CLI_LOG_NAMES:
-                self.assertFalse(paths[name].exists())
+                self.assertTrue(paths[name].exists())
+                self.assertEqual(paths[name].read_text(encoding="utf-8"), "")
                 self.assertTrue(Path(f"{paths[name]}.1").exists())
             for name in LISTENER_LOG_NAMES:
                 self.assertTrue(paths[name].exists())
@@ -57,8 +66,30 @@ class LogRotationTests(unittest.TestCase):
             rotate_logs(directory, names=LISTENER_LOG_NAMES, max_bytes=1)
 
             for name in LISTENER_LOG_NAMES:
-                self.assertFalse(paths[name].exists())
+                self.assertTrue(paths[name].exists())
+                self.assertEqual(paths[name].read_text(encoding="utf-8"), "")
                 self.assertTrue(Path(f"{paths[name]}.1").exists())
+
+    def test_rotation_preserves_open_append_descriptor(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = Path(directory) / "listener.log"
+            log_path.write_text("before rotation", encoding="utf-8")
+            descriptor = os.open(log_path, os.O_WRONLY | os.O_APPEND)
+            try:
+                original_inode = os.fstat(descriptor).st_ino
+                rotate_logs(directory, names=(log_path.name,), max_bytes=1)
+                os.write(descriptor, b"after rotation")
+                self.assertEqual(os.fstat(descriptor).st_ino, original_inode)
+                self.assertEqual(log_path.stat().st_ino, original_inode)
+            finally:
+                os.close(descriptor)
+
+            self.assertEqual(log_path.read_text(encoding="utf-8"), "after rotation")
+            self.assertEqual(
+                Path(f"{log_path}.1").read_text(encoding="utf-8"), "before rotation"
+            )
 
     def test_configured_log_names_match_launchd_templates(self):
         from scripts.install_launchd import TEMPLATES, render_template
@@ -91,21 +122,44 @@ class LogRotationTests(unittest.TestCase):
             log_path.write_text("oversized", encoding="utf-8")
             output = StringIO()
 
-            with patch.object(Path, "replace", side_effect=OSError("fixture error")), redirect_stdout(output):
+            with patch(
+                "mail_digest.services.log_rotation.os.truncate",
+                side_effect=OSError("fixture error"),
+            ), redirect_stdout(output):
                 rotate_logs(directory, max_bytes=1)
 
             self.assertEqual(output.getvalue(), "")
             self.assertTrue(log_path.exists())
 
-    def test_cli_main_rotates_project_logs_before_running_digest(self):
-        from mail_digest.cli import main
+    def test_digest_log_names_are_selected_by_mode(self):
+        self.assertEqual(log_names_for_mode("daily_scheduled"), DAILY_LOG_NAMES)
+        self.assertEqual(log_names_for_mode("reminder"), REMINDER_LOG_NAMES)
 
-        with patch("mail_digest.cli.rotate_logs") as rotate, patch(
-            "mail_digest.cli.run_digest", return_value=0
-        ), patch("sys.argv", ["main.py"]):
-            self.assertEqual(main(), 0)
+    def test_run_digest_rotates_mode_logs_after_lock(self):
+        from contextlib import contextmanager
 
-        rotate.assert_called_once_with(PROJECT_ROOT / "logs", names=CLI_LOG_NAMES)
+        from mail_digest.cli import run_digest
+
+        events = []
+
+        @contextmanager
+        def fake_lock(*, wait_seconds):
+            events.append(("lock", wait_seconds))
+            yield
+
+        def fake_rotate(path, *, names):
+            events.append(("rotate", path, names))
+
+        with patch("mail_digest.cli.digest_lock", side_effect=fake_lock), patch(
+            "mail_digest.cli.rotate_logs", side_effect=fake_rotate
+        ), patch("mail_digest.cli._run_digest", return_value=0) as digest:
+            self.assertEqual(run_digest(mode="reminder", dry_run=True), 0)
+
+        self.assertEqual(events[0][0], "lock")
+        self.assertEqual(
+            events[1], ("rotate", PROJECT_ROOT / "logs", REMINDER_LOG_NAMES)
+        )
+        digest.assert_called_once_with(upcoming=False, dry_run=True, mode="reminder")
 
     def test_listener_main_rotates_project_logs_before_loading_credentials(self):
         from telegram_listener import main

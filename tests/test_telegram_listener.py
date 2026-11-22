@@ -12,7 +12,9 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from mail_digest.commands import MEETING_COMMANDS, meeting_help_text
+from mail_digest.config import PROJECT_ROOT
 from mail_digest.integrations.company_reporting import REPORT_SERVICE_UNAVAILABLE
+from mail_digest.services.log_rotation import LISTENER_LOG_NAMES
 from telegram_listener import (
     DONE,
     FAILED,
@@ -23,6 +25,7 @@ from telegram_listener import (
     _listener_conflict_backoff_seconds,
     _load_listener_state,
     _load_processed_update_ids,
+    _rotate_listener_logs_if_due,
     main,
     process_update,
 )
@@ -38,6 +41,21 @@ class TelegramListenerCommandTests(unittest.TestCase):
                 "text": command,
             },
         }
+
+    def test_listener_checks_log_rotation_at_most_hourly(self):
+        with patch("telegram_listener.rotate_logs") as rotate:
+            self.assertEqual(_rotate_listener_logs_if_due(100, now=3699), 100)
+            rotate.assert_not_called()
+
+            self.assertEqual(_rotate_listener_logs_if_due(100, now=3700), 3700)
+            rotate.assert_called_once()
+            rotate.assert_called_with(
+                PROJECT_ROOT / "logs",
+                names=LISTENER_LOG_NAMES,
+            )
+
+            self.assertEqual(_rotate_listener_logs_if_due(3700, now=7299), 3700)
+            rotate.assert_called_once()
 
     def test_wrong_chat_is_ignored(self):
         with patch("telegram_listener.send_text") as send, patch(
