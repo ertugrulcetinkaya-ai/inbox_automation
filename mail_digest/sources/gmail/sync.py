@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import time
 
-from ...config import GMAIL_BATCH_PAUSE_SECONDS, GMAIL_BATCH_SIZE, log
+from ...config import (
+    gmail_batch_pause_seconds,
+    gmail_batch_size,
+    log,
+    target_email,
+)
+from .account import GmailAccountMismatch, validate_gmail_profile
 from .api import GmailApiError, GmailHistoryExpired, GmailNotFound
 from .mime import MessageStructureError, normalize_message
 from .store import RETENTION_VERSION
@@ -15,7 +21,6 @@ CALENDAR_WINDOW_MS = 366 * 86400 * 1000
 RETENTION_UPGRADE_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000
 FULL_SYNC_QUERIES = ("newer_than:31d", "newer_than:367d filename:ics")
 STAGE_BATCH_SIZE = 100
-FETCH_BATCH_SIZE = GMAIL_BATCH_SIZE
 
 
 class GmailSyncError(RuntimeError):
@@ -64,7 +69,7 @@ class GmailSynchronizer:
         max_full_attempts=2,
         stage_batch_size=STAGE_BATCH_SIZE,
         sleep=time.sleep,
-        batch_pause_seconds=GMAIL_BATCH_PAUSE_SECONDS,
+        batch_pause_seconds=None,
     ):
         self.api = api
         self.store = store
@@ -72,6 +77,7 @@ class GmailSynchronizer:
         self.max_full_attempts = max_full_attempts
         self.sleep = sleep
         self.batch_pause_seconds = batch_pause_seconds
+        self.account = getattr(store, "account", None)
         if stage_batch_size <= 0:
             raise ValueError("stage_batch_size must be positive")
         self.stage_batch_size = stage_batch_size
@@ -81,7 +87,20 @@ class GmailSynchronizer:
             message,
             attachment_loader=self.api.get_attachment,
             raw_loader=lambda message_id: self.api.get_message(message_id, format="raw"),
+            account=self.account,
         )
+
+    def _get_validated_profile(self):
+        expected_email = target_email()
+        profile = self.api.get_profile()
+        try:
+            validate_gmail_profile(profile, expected_email)
+        except GmailAccountMismatch as exc:
+            raise GmailSyncError("Gmail account mismatch") from exc
+        self.account = expected_email
+        if hasattr(self.store, "account"):
+            self.store.account = expected_email
+        return profile
 
     @staticmethod
     def _is_current_inbox(message, cutoff_ms):
@@ -116,13 +135,14 @@ class GmailSynchronizer:
             return "delete", message_id
         return "upsert", record
 
-    def full_sync(self):
+    def full_sync(self, initial_profile=None):
         last_expired = None
         for _attempt in range(self.max_full_attempts):
             now_ms = self.now_ms()
             cutoff_ms = now_ms - WINDOW_MS
             calendar_cutoff_ms = now_ms - CALENDAR_WINDOW_MS
-            profile = self.api.get_profile()
+            profile = initial_profile or self._get_validated_profile()
+            initial_profile = None
             start_history_id = profile.get("historyId")
             if not start_history_id:
                 raise GmailSyncError("Gmail profile did not contain historyId")
@@ -135,8 +155,9 @@ class GmailSynchronizer:
                     for message_id in self.api.iter_message_ids(query)
                 }
                 sorted_message_ids = sorted(message_ids)
-                for offset in range(0, len(sorted_message_ids), FETCH_BATCH_SIZE):
-                    message_batch = sorted_message_ids[offset:offset + FETCH_BATCH_SIZE]
+                batch_size = gmail_batch_size()
+                for offset in range(0, len(sorted_message_ids), batch_size):
+                    message_batch = sorted_message_ids[offset:offset + batch_size]
                     batch_results = self.api.get_messages_batch(
                         message_batch, format="full"
                     )
@@ -155,8 +176,14 @@ class GmailSynchronizer:
                             if len(snapshot_batch) >= self.stage_batch_size:
                                 self.store.stage_many(snapshot_batch)
                                 snapshot_batch = []
-                    if offset + FETCH_BATCH_SIZE < len(sorted_message_ids):
-                        self.sleep(self.batch_pause_seconds)
+                    if offset + batch_size < len(sorted_message_ids):
+                        pause_seconds = (
+                            gmail_batch_pause_seconds()
+                            if self.batch_pause_seconds is None
+                            else self.batch_pause_seconds
+                        )
+                        if pause_seconds > 0:
+                            self.sleep(pause_seconds)
                 if snapshot_batch:
                     self.store.stage_many(snapshot_batch)
                 affected, new_history_id = _affected_ids(
@@ -202,6 +229,7 @@ class GmailSynchronizer:
         raise GmailSyncError("Gmail history expired repeatedly during full sync") from last_expired
 
     def incremental_sync(self, checkpoint):
+        self._get_validated_profile()
         now_ms = self.now_ms()
         cutoff_ms = now_ms - WINDOW_MS
         calendar_cutoff_ms = now_ms - CALENDAR_WINDOW_MS
@@ -237,15 +265,29 @@ class GmailSynchronizer:
             ):
                 self.incremental_sync(checkpoint)
             else:
-                self.store.set_retention_upgrade_last_attempt_ms(now_ms)
                 try:
-                    self.full_sync()
-                except (GmailApiError, GmailSyncError) as exc:
+                    profile = self._get_validated_profile()
+                except GmailSyncError:
+                    # A mismatch must be rejected before even migration metadata
+                    # changes, so the next invocation sees the same cache state.
+                    raise
+                except GmailApiError as exc:
+                    self.store.set_retention_upgrade_last_attempt_ms(now_ms)
                     log(
                         "Retention upgrade full sync failed "
                         f"({type(exc).__name__}: {exc}); continuing with incremental sync"
                     )
                     self.incremental_sync(checkpoint)
+                else:
+                    self.store.set_retention_upgrade_last_attempt_ms(now_ms)
+                    try:
+                        self.full_sync(initial_profile=profile)
+                    except (GmailApiError, GmailSyncError) as exc:
+                        log(
+                            "Retention upgrade full sync failed "
+                            f"({type(exc).__name__}: {exc}); continuing with incremental sync"
+                        )
+                        self.incremental_sync(checkpoint)
         else:
             self.incremental_sync(checkpoint)
         return self.store.records()

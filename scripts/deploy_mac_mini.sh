@@ -88,23 +88,27 @@ else
     "$VENV_PYTHON" -m compileall -q main.py telegram_listener.py mail_digest tests scripts
 fi
 
-PREFLIGHT_LOCK="$(mktemp "${TMPDIR:-/tmp}/inbox_preflight_lock.XXXXXX")"
+if ! "$VENV_PYTHON" -c 'from mail_digest.config import target_email; target_email()' \
+    >/dev/null 2>&1; then
+    printf '~/.hermes_local_automation/mail_digest/target.env eksik\n' >&2
+    exit 1
+fi
+
 PREFLIGHT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/inbox_preflight_output.XXXXXX")"
-trap 'rm -f "$PREFLIGHT_LOCK" "$PREFLIGHT_OUTPUT"' EXIT
+trap 'rm -f "$PREFLIGHT_OUTPUT"' EXIT
 
 PREFLIGHT_STATUS=0
-if MAIL_SOURCE=gmail MAIL_DIGEST_LOCK_FILE="$PREFLIGHT_LOCK" \
+if MAIL_SOURCE=gmail MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS="${MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS:-120}" \
     "$VENV_PYTHON" main.py --upcoming --dry-run >"$PREFLIGHT_OUTPUT" 2>&1; then
     :
 else
     PREFLIGHT_STATUS=$?
 fi
-if grep -Fq 'Digest is already running' "$PREFLIGHT_OUTPUT"; then
-    PREFLIGHT_STATUS=1
+if [[ "$PREFLIGHT_STATUS" -eq 75 ]]; then
+    printf 'Gmail ön kontrolü başarısız: üretim işi çalışıyor; birkaç dakika sonra tekrar deneyin.\n' >&2
+    exit 75
 fi
-
 if [[ "$PREFLIGHT_STATUS" -ne 0 ]]; then
-    tail -n 20 "$PREFLIGHT_OUTPUT" >&2
     printf 'Gmail ön kontrolü başarısız; önce .venv/bin/python scripts/gmail_auth.py çalıştırın.\n' >&2
     exit 1
 fi

@@ -1,14 +1,6 @@
 -- AppleScript to fetch calendar/meeting candidate messages for one Mail account.
 -- Read-only implementation: it never changes message state.
 
-set fieldDelimiter to "__MAIL_DIGEST_FIELD__"
-set lineBreakToken to "__MAIL_DIGEST_LINEBREAK__"
-set targetEmail to "ertugrul@cetinkayalar.com"
-set maxContentChars to 40000
-set maxSourceChars to 100000
-set lookbackDays to 30
-set messageReadTimeoutSeconds to 20
-
 on replaceText(theText, searchString, replacementString)
 	set AppleScript's text item delimiters to searchString
 	set textItems to every text item of theText
@@ -26,6 +18,15 @@ on flattenField(theText, fieldDelimiter, lineBreakToken)
 	set theText to my replaceText(theText, fieldDelimiter, " ")
 	return theText
 end flattenField
+
+on run argv
+	set fieldDelimiter to "__MAIL_DIGEST_FIELD__"
+	set lineBreakToken to "__MAIL_DIGEST_LINEBREAK__"
+	set targetEmail to (item 1 of argv) as text
+	set maxContentChars to 40000
+	set maxSourceChars to 100000
+	set lookbackDays to 30
+	set messageReadTimeoutSeconds to 20
 
 tell application "Mail"
 	set finalOutput to ""
@@ -201,3 +202,4 @@ tell application "Mail"
 
 	return finalOutput
 end tell
+end run

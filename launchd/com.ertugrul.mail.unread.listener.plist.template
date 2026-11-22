@@ -20,6 +20,8 @@
         <string>1</string>
         <key>MAIL_SOURCE</key>
         <string>__MAIL_SOURCE__</string>
+        <key>MAIL_DIGEST_TARGET_EMAIL</key>
+        <string>__MAIL_DIGEST_TARGET_EMAIL__</string>
         <key>GMAIL_CREDENTIALS_FILE</key>
         <string>__GMAIL_CREDENTIALS_FILE__</string>
         <key>GMAIL_TOKEN_FILE</key>

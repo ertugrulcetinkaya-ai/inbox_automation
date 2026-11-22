@@ -15,7 +15,7 @@ from ...config import (
     MAX_BODY_BYTES,
     MAX_ICS_BYTES,
     MAX_RAW_MIME_BYTES,
-    TARGET_EMAIL,
+    target_email,
 )
 from ...utils import limit_utf8_bytes, sanitize_content, sanitize_transport_field
 from .api import GmailApiError
@@ -247,7 +247,7 @@ def _received_date_text(headers, internal_date_ms):
     return value.strftime("%a, %d %b %Y %H:%M:%S %z")
 
 
-def normalize_message(message, attachment_loader, raw_loader):
+def normalize_message(message, attachment_loader, raw_loader, account=None):
     message_id = message.get("id") if isinstance(message, dict) else None
     if not isinstance(message_id, str) or not message_id:
         raise MessageStructureError("missing Gmail message id")
@@ -341,7 +341,7 @@ def normalize_message(message, attachment_loader, raw_loader):
         "gmail_message_id": message_id,
         "thread_id": str(message.get("threadId") or ""),
         "internal_date_ms": internal_date_ms,
-        "account": TARGET_EMAIL,
+        "account": account if account is not None else target_email(),
         "mailbox": "INBOX",
         "sender": headers.get("from", ""),
         "subject": headers.get("subject", ""),

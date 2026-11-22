@@ -1,3 +1,4 @@
+import os
 import subprocess
 import signal
 import io
@@ -12,6 +13,9 @@ from mail_digest.config import SecretFilePermissionError, load_env
 from mail_digest.delivery.telegram import send_telegram, send_text
 from mail_digest.sources.apple_mail import fetch_mail
 from telegram_listener import (
+    DONE,
+    FAILED,
+    RETRY,
     TelegramConfigurationError,
     _load_processed_update_ids,
     process_update,
@@ -57,6 +61,13 @@ class EnvironmentLoaderTests(unittest.TestCase):
 
 
 class AppleMailSourceFailureTests(unittest.TestCase):
+    def setUp(self):
+        self.target_environment = patch.dict(
+            os.environ, {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}
+        )
+        self.target_environment.start()
+        self.addCleanup(self.target_environment.stop)
+
     def completed(self, stdout="", stderr="", returncode=0):
         return subprocess.CompletedProcess(
             args=["osascript"],
@@ -104,6 +115,7 @@ class AppleMailSourceFailureTests(unittest.TestCase):
 
         self.assertIsNone(_run_applescript())
         popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0][-1], "user@example.com")
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
         killpg.assert_called_once_with(process.pid, signal.SIGKILL)
 
@@ -319,7 +331,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, patch(
             "telegram_listener._run_digest_for_command",
-            return_value=(True, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."),
+            return_value=(DONE, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."),
         ) as run_digest, patch("telegram_listener.send_text") as send:
             self.assertTrue(
                 process_update(
@@ -348,7 +360,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
             with self.subTest(response=response[:12]), tempfile.TemporaryDirectory() as directory:
                 with patch(
                     "telegram_listener._run_digest_for_command",
-                    return_value=(False, response),
+                    return_value=(RETRY if "hazırlanıyor" in response else FAILED, response),
                 ), patch("telegram_listener.send_text") as send:
                     self.assertTrue(
                         process_update(
@@ -381,14 +393,15 @@ class TelegramUpdateStateTests(unittest.TestCase):
                         state_file=state_file,
                     )
                 )
-                self.assertFalse(
+                self.assertEqual(
                     process_update(
                         update,
                         "fixture-token",
                         "fixture-chat",
                         processed_update_ids=processed,
                         state_file=state_file,
-                    )
+                    ),
+                    DONE,
                 )
 
             send.assert_called_once()

@@ -21,7 +21,9 @@ class DeployScriptTests(unittest.TestCase):
         launchd_output="",
         apply=False,
         preflight_ok=True,
+        preflight_exit=None,
         preflight_output="",
+        target_config_ok=True,
         bootstrap_failure_count=0,
         bootstrap_fail_label="",
         wait_label="",
@@ -113,6 +115,7 @@ fi
             "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_PYTHON_LOG\"\n"
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == import && \"$*\" == '-c import sys' ]]; then exit 1; fi\n"
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == pip && \"$*\" == '-m pip --version' ]]; then exit 1; fi\n"
+            "if [[ \"$DEPLOY_TEST_TARGET_CONFIG_OK\" == false && \"$*\" == '-c from mail_digest.config import target_email; target_email()' ]]; then exit 1; fi\n"
             "if [[ \"$*\" == 'main.py --upcoming --dry-run' ]]; then\n"
             "  printf '%s\\n' \"${MAIL_DIGEST_LOCK_FILE:-}\" > \"$DEPLOY_TEST_PYTHON_LOG.preflight_lock\"\n"
             "  printf '%s\\n' \"$DEPLOY_TEST_PREFLIGHT_OUTPUT\"\n"
@@ -148,8 +151,11 @@ fi
                 "DEPLOY_TEST_BRANCH": branch,
                 "DEPLOY_TEST_DIRTY": "true" if dirty else "false",
                 "DEPLOY_TEST_LAUNCHD": launchd_output,
-                "DEPLOY_TEST_PREFLIGHT_EXIT": "0" if preflight_ok else "1",
+                "DEPLOY_TEST_PREFLIGHT_EXIT": str(
+                    preflight_exit if preflight_exit is not None else (0 if preflight_ok else 1)
+                ),
                 "DEPLOY_TEST_PREFLIGHT_OUTPUT": preflight_output,
+                "DEPLOY_TEST_TARGET_CONFIG_OK": "true" if target_config_ok else "false",
                 "DEPLOY_TEST_BOOTSTRAP_FAILURE_COUNT": str(bootstrap_failure_count),
                 "DEPLOY_TEST_BOOTSTRAP_FAIL_LABEL": bootstrap_fail_label,
                 "DEPLOY_TEST_BOOTSTRAP_ERROR": "Bootstrap failed: 5: Input/output error",
@@ -161,6 +167,7 @@ fi
                 "DEPLOY_TEST_GIT_LOG": str(git_log),
                 "DEPLOY_TEST_LAUNCHCTL_LOG": str(launchctl_log),
                 "DEPLOY_TEST_PYTHON_LOG": str(python_log),
+                "MAIL_DIGEST_LOCK_FILE": str(temp_root / "production.lock"),
             }
         )
         args = ["bash", str(repo / "scripts" / "deploy_mac_mini.sh")]
@@ -207,7 +214,7 @@ fi
         preflight_lock = Path(
             Path(f"{python_log}.preflight_lock").read_text(encoding="utf-8").strip()
         )
-        self.assertNotEqual(str(preflight_lock), "/tmp/mail_unread_digest.lock")
+        self.assertEqual(str(preflight_lock), str(Path(python_log).parent / "production.lock"))
         self.assertNotIn("successful preflight output must stay hidden", result.stdout)
         self.assertNotIn("successful preflight output must stay hidden", result.stderr)
 
@@ -267,32 +274,43 @@ fi
             preflight_output=preflight_output,
         )
 
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 1)
         self.assertIn(
             "Gmail ön kontrolü başarısız; önce .venv/bin/python scripts/gmail_auth.py çalıştırın.",
             result.stderr,
         )
-        self.assertNotIn("preflight-line-04", result.stderr)
-        self.assertIn("preflight-line-05", result.stderr)
-        self.assertIn("preflight-line-24", result.stderr)
-        self.assertLess(
-            result.stderr.index("preflight-line-24"),
-            result.stderr.index("Gmail ön kontrolü başarısız"),
-        )
+        self.assertNotIn("preflight-line-", result.stderr)
         calls = python_log.read_text(encoding="utf-8").splitlines()
         self.assertIn("main.py --upcoming --dry-run", calls)
         self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))
         self.assertFalse(launchctl_log.exists())
 
-    def test_digest_lock_contention_output_fails_even_with_zero_exit(self):
-        result, launchctl_log, python_log = self.run_deploy(
-            preflight_ok=True,
-            preflight_output="Digest is already running; skipping this invocation",
-        )
+    def test_missing_target_configuration_stops_before_gmail_preflight(self):
+        result, launchctl_log, python_log = self.run_deploy(target_config_ok=False)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Digest is already running", result.stderr)
-        self.assertIn("Gmail ön kontrolü başarısız", result.stderr)
+        self.assertIn(
+            "~/.hermes_local_automation/mail_digest/target.env eksik",
+            result.stderr,
+        )
+        calls = python_log.read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("main.py --upcoming --dry-run", calls)
+        self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))
+        self.assertFalse(launchctl_log.exists())
+
+    def test_digest_lock_contention_returns_75_without_leaking_preflight_output(self):
+        result, launchctl_log, python_log = self.run_deploy(
+            preflight_exit=75,
+            preflight_output="private meeting title must stay hidden",
+        )
+
+        self.assertEqual(result.returncode, 75)
+        self.assertIn(
+            "üretim işi çalışıyor; birkaç dakika sonra tekrar deneyin",
+            result.stderr,
+        )
+        self.assertNotIn("private meeting title", result.stdout + result.stderr)
+        self.assertNotIn("Gmail ön kontrolü başarısız; önce", result.stderr)
         calls = python_log.read_text(encoding="utf-8").splitlines()
         self.assertIn("main.py --upcoming --dry-run", calls)
         self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))

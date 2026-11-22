@@ -1,4 +1,5 @@
 import base64
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -10,11 +11,13 @@ from mail_digest.sources.gmail.api import GmailApiError, GmailHistoryExpired, Gm
 from mail_digest.sources.gmail.auth import GmailAuthError
 from mail_digest.sources.gmail.store import GmailStore
 from mail_digest.services.meeting_service import build_digest_result
+from mail_digest.config import gmail_batch_size
+from mail_digest.config import TargetEmailConfigurationError
 from mail_digest.sources.gmail.sync import (
     CALENDAR_WINDOW_MS,
-    FETCH_BATCH_SIZE,
     FULL_SYNC_QUERIES,
     GmailSynchronizer,
+    GmailSyncError,
     RETENTION_UPGRADE_RETRY_INTERVAL_MS,
     WINDOW_MS,
 )
@@ -88,7 +91,7 @@ def message_added_without_labels(message_id):
 
 class FakeApi:
     def __init__(self):
-        self.profiles = [{"historyId": "100"}]
+        self.profiles = [{"historyId": "100", "emailAddress": "user@example.com"}]
         self.profile_calls = 0
         self.listed = []
         self.listed_by_query = {}
@@ -143,9 +146,14 @@ class FakeApi:
 
 class GmailSyncTests(unittest.TestCase):
     def setUp(self):
+        self.target_environment = patch.dict(
+            os.environ, {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}
+        )
+        self.target_environment.start()
+        self.addCleanup(self.target_environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / "cache.sqlite3"
-        self.store = GmailStore(self.path)
+        self.store = GmailStore(self.path, account="user@example.com")
         self.api = FakeApi()
         self.sleeps = []
         self.sync = GmailSynchronizer(
@@ -182,6 +190,72 @@ class GmailSyncTests(unittest.TestCase):
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
 
+    def test_full_sync_validates_profile_case_insensitively_and_records_target(self):
+        self.api.profiles = [
+            {"historyId": "100", "emailAddress": "USER@EXAMPLE.COM"}
+        ]
+        self.api.listed = ["targeted"]
+        self.api.messages["targeted"] = full_message("targeted")
+
+        self.sync.full_sync()
+
+        self.assertEqual(self.api.profile_calls, 1)
+        self.assertEqual(self.store.records()[0]["account"], "user@example.com")
+
+    def test_full_sync_mismatch_preserves_existing_cache_and_checkpoint(self):
+        self.seed_old()
+        self.api.profiles = [
+            {"historyId": "100", "emailAddress": "other@example.org"}
+        ]
+
+        with self.assertRaisesRegex(GmailSyncError, "Gmail account mismatch"):
+            self.sync.full_sync()
+
+        self.assertEqual(self.store.checkpoint(), "90")
+        self.assertEqual(self.ids(), ["old"])
+        self.assertEqual(self.api.list_queries, [])
+        self.assertEqual(self.api.history_calls, [])
+
+    def test_incremental_mismatch_preserves_cache_and_checkpoint(self):
+        self.seed_old()
+        self.api.profiles = [{"emailAddress": "other@example.org"}]
+
+        with self.assertRaisesRegex(GmailSyncError, "Gmail account mismatch"):
+            self.sync.incremental_sync("90")
+
+        self.assertEqual(self.store.checkpoint(), "90")
+        self.assertEqual(self.ids(), ["old"])
+        self.assertEqual(self.api.history_calls, [])
+
+    def test_sync_requires_a_configured_target_before_profile_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing_path = Path(directory) / "missing.env"
+            with patch.dict(
+                os.environ,
+                {"MAIL_DIGEST_TARGET_ENV_FILE": str(missing_path)},
+                clear=True,
+            ):
+                with self.assertRaises(TargetEmailConfigurationError):
+                    self.sync.full_sync()
+
+        self.assertEqual(self.api.profile_calls, 0)
+
+    def test_upgrade_mismatch_does_not_write_migration_attempt_metadata(self):
+        self.seed_old()
+        with self.store.connection:
+            self.store.connection.execute(
+                "DELETE FROM metadata WHERE key='retention_version'"
+            )
+        self.api.profiles = [
+            {"historyId": "100", "emailAddress": "other@example.org"}
+        ]
+
+        with self.assertRaisesRegex(GmailSyncError, "Gmail account mismatch"):
+            self.sync.sync()
+
+        self.assertEqual(self.store.checkpoint(), "90")
+        self.assertIsNone(self.store.retention_upgrade_last_attempt_ms())
+
     def test_full_sync_arrival_after_boundary_is_reconciled(self):
         self.api.messages["new"] = full_message("new")
         self.api.history["100"] = [history_page("110", [event("messagesAdded", "new")])]
@@ -208,8 +282,9 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.api.batch_calls, [(sorted(self.api.listed), "full")])
 
     def test_full_sync_fetches_snapshot_in_configured_batches(self):
+        batch_size = gmail_batch_size()
         self.api.listed = [
-            f"message-{index:03d}" for index in range(2 * FETCH_BATCH_SIZE + 1)
+            f"message-{index:03d}" for index in range(2 * batch_size + 1)
         ]
         self.api.messages = {
             message_id: full_message(message_id) for message_id in self.api.listed
@@ -219,7 +294,7 @@ class GmailSyncTests(unittest.TestCase):
 
         self.assertEqual(
             [len(ids) for ids, _format in self.api.batch_calls],
-            [FETCH_BATCH_SIZE, FETCH_BATCH_SIZE, 1],
+            [batch_size, batch_size, 1],
         )
         self.assertEqual(self.sleeps, [1.0, 1.0])
         self.assertEqual(len(self.ids()), len(self.api.listed))
@@ -292,7 +367,10 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.store.checkpoint(), "90")
 
     def test_history_404_restarts_full_sync_with_new_profile_bounded(self):
-        self.api.profiles = [{"historyId": "100"}, {"historyId": "200"}]
+        self.api.profiles = [
+            {"historyId": "100", "emailAddress": "USER@example.com"},
+            {"historyId": "200", "emailAddress": "user@example.com"},
+        ]
         self.api.history = {
             "100": GmailHistoryExpired("stale"),
             "200": [history_page("201")],
@@ -303,7 +381,10 @@ class GmailSyncTests(unittest.TestCase):
 
     def test_repeated_history_404_fails_without_looping(self):
         self.seed_old()
-        self.api.profiles = [{"historyId": "100"}, {"historyId": "200"}]
+        self.api.profiles = [
+            {"historyId": "100", "emailAddress": "user@example.com"},
+            {"historyId": "200", "emailAddress": "user@example.com"},
+        ]
         self.api.history = {
             "100": GmailHistoryExpired("stale"), "200": GmailHistoryExpired("stale")
         }
@@ -627,7 +708,10 @@ class GmailSyncTests(unittest.TestCase):
             self.store.connection.execute(
                 "DELETE FROM metadata WHERE key='retention_version'"
             )
-        self.api.profiles = [GmailApiError("Gmail API request failed (HTTP 403)")]
+        self.api.profiles = [
+            GmailApiError("Gmail API request failed (HTTP 403)"),
+            {"emailAddress": "user@example.com"},
+        ]
         self.api.history["90"] = [history_page("91")]
 
         with patch("mail_digest.sources.gmail.sync.log") as logger:
@@ -654,14 +738,12 @@ class GmailSyncTests(unittest.TestCase):
         self.store.set_retention_upgrade_last_attempt_ms(
             NOW_MS - RETENTION_UPGRADE_RETRY_INTERVAL_MS + 1
         )
-        prior_failure = GmailApiError("must not run full sync")
-        self.api.profiles = [prior_failure, {"historyId": "100"}]
+        self.api.profiles = [{"emailAddress": "user@example.com"}]
         self.api.history["90"] = [history_page("91")]
 
         self.sync.sync()
 
-        self.assertEqual(self.api.profile_calls, 0)
-        self.assertEqual(self.api.profiles[0], prior_failure)
+        self.assertEqual(self.api.profile_calls, 1)
         self.assertEqual(self.api.list_queries, [])
         self.assertEqual(self.api.history_calls, ["90"])
         self.assertIsNone(self.store.retention_version())
@@ -705,7 +787,7 @@ class GmailSyncTests(unittest.TestCase):
     def test_process_restart_reads_existing_cache_and_checkpoint(self):
         self.seed_old()
         self.store.close()
-        self.store = GmailStore(self.path)
+        self.store = GmailStore(self.path, account="user@example.com")
         self.assertEqual(self.store.checkpoint(), "90")
         self.assertEqual(self.ids(), ["old"])
         self.assertEqual(self.store.records()[0]["thread_id"], "t")

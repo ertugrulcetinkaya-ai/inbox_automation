@@ -1,6 +1,6 @@
 # Inbox Automation
 
-`inbox_automation`, `ertugrul@cetinkayalar.com` hesabının üretim Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Yalnızca birincil gelen kutusu (`INBOX`/`Inbox`) taranır. Gmail varsayılan kaynaktır; Apple Mail yalnızca `MAIL_SOURCE=apple_mail` açıkça verildiğinde rollback kaynağı olarak kullanılır.
+`inbox_automation`, `MAIL_DIGEST_TARGET_EMAIL` ile yapılandırılan Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Yalnızca birincil gelen kutusu (`INBOX`/`Inbox`) taranır. Gmail varsayılan kaynaktır; Apple Mail yalnızca `MAIL_SOURCE=apple_mail` açıkça verildiğinde rollback kaynağı olarak kullanılır.
 
 Proje yalnızca hedef hesabın birincil gelen kutusunu inceler. Gmail'de normal mesajlar 30 gün, takvim payload'ı (`raw_source`) bulunan mesajlar 366 gün saklanır; Apple Mail rollback yolu 30 günle sınırlıdır. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
 
@@ -109,7 +109,7 @@ daily / upcoming Telegram digest
 
 Kod akışı katmanlıdır: `sources` Mail erişimini, `parsing` toplantı çıkarımını, `services` iş kurallarını, `delivery` Telegram gönderimini ve `cli` çalışma akışını taşır. Böylece tarih/ICS parser değişiklikleri Telegram gönderim koduna dokunmadan test edilebilir.
 
-Canonical `Meeting` modeli aşağıdaki alanları taşır. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Recurring master tanımları UID başına birleştirilir; en yüksek `SEQUENCE`, eşitlikte en yeni `source_received_at` seçilir. `SEQUENCE` değeri master ile eşit veya yüksek olan `RECURRENCE-ID` override'ı ilgili oluşuma tercih edilir. Recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur ve günlük sınırlar Europe/Istanbul saat diliminden etkinliğin saat dilimine çevrilir. UID olmayan lifecycle iletilerinde Gmail `thread_id`, canonical gönderen e-postası ve konu ailesi tarih/saat bağlamıyla eşleştirilir; tarih-only iptaller aynı günün zamanlı davetlerini bastırır.
+Canonical `Meeting` modeli aşağıdaki alanları taşır. ICS toplantıları `confidence=1.0` ile gelir; ikinci bağlam kontrolünü geçen semantic fallback kayıtları daha düşük güven seviyesiyle işaretlenir ve `Dikkat gerektirenler` görünümünde kalır. Recurring master tanımları UID başına birleştirilir; en yüksek `SEQUENCE`, eşitlikte en yeni `source_received_at` seçilir. `SEQUENCE` değeri master ile eşit veya yüksek olan `RECURRENCE-ID` override'ı ilgili oluşuma tercih edilir. Recurring ICS serilerinde occurrence kimliği `UID + RECURRENCE-ID` olur ve günlük sınırlar Europe/Istanbul saat diliminden etkinliğin saat dilimine çevrilir. UID olmayan lifecycle iletileri Gmail `thread_id`, canonical gönderen e-postası ve konu ailesi tarih/saat bağlamıyla eşleştirilir; yalnızca daha yeni, tarih veya saat bakımından hedefli bir iptal mevcut daveti bastırabilir. UID'li ICS davetleri metin tabanlı lifecycle iletilerinden etkilenmez. İptal/erteleme ifadeleri toplantı bağlamında sınıflandırılır; iptal politikası açıklamaları durum değişikliği sayılmaz. Takvim bitiş saati başlangıç saatinden erkense ertesi güne taşınır.
 
 ### Meeting modeli
 
@@ -132,7 +132,7 @@ Canonical `Meeting` modeli aşağıdaki alanları taşır. ICS toplantıları `c
 | `supersedes_start_at` |
 | `recurrence_id` |
 
-`STATUS:CANCELLED` veya `METHOD:CANCEL` olan ICS etkinlikleri listeye alınmaz. Aynı `UID` için daha yüksek `SEQUENCE` değerine sahip kayıt geçerli kabul edilir; böylece tarih değişikliği ve iptal mailleri eski daveti bastırır. Semantic metinde `iptal`, `ertelendi/rescheduled` ve `tentative` durumları da sınıflandırılır. `DTSTART;TZID=...`, UTC (`Z`) ve tarih-only ICS değerleri desteklenir; UTC zamanları Telegram özeti için Europe/Istanbul saatine çevrilir.
+`STATUS:CANCELLED` veya `METHOD:CANCEL` olan ICS etkinlikleri listeye alınmaz. Aynı `UID` için daha yüksek `SEQUENCE` değerine sahip kayıt geçerli kabul edilir; böylece tarih değişikliği ve iptal mailleri eski daveti bastırır. Eşit `SEQUENCE`'ta iptal kazanır; diğer durumlarda kaynak tarihi, sonra durum önceliği kullanılır. Semantic metinde `iptal`, `ertelendi/rescheduled` ve `tentative` durumları da sınıflandırılır. `DTSTART;TZID=...`, UTC (`Z`) ve tarih-only ICS değerleri desteklenir; Windows saat dilimi adları [Unicode CLDR eşlemesine](https://github.com/unicode-org/cldr/blob/main/common/supplemental/windowsZones.xml) göre IANA bölgelerine çevrilir. Tanınmayan `TZID`, `VTIMEZONE` içindeki `STANDARD/TZOFFSETTO` sabit ofsetine düşer; o da yoksa tarih-saat eski davranışla timezone'suz kalır ve yalnızca bellek içi çözümlenmemiş TZID sayacı artar. `VEVENT` alt bileşenleri (ör. `VALARM`) olay özelliği sayılmaz. `DTEND` yoksa RFC 5545 `DURATION` kullanılır. UTC zamanları Telegram özeti için Europe/Istanbul saatine çevrilir.
 
 Yıl belirtilmeyen `5 Ocak` gibi tarihler önce hedef tarihin yılıyla oluşturulur. Bu aday hedef tarihten en az 60 gün gerideyse bir sonraki yıl adayı kullanılır; böylece yıl geçişinde gelecek toplantılar elenmezken, yakın geçmişteki tarihler yanlışlıkla ileri taşınmaz.
 
@@ -175,7 +175,7 @@ python3 -m venv .venv
 ortamının transitive runtime bağımlılıklarını exact sürümlerle taşır; CI lock
 dosyasını kurup onun tamamını audit eder.
 
-Apple Mail yalnızca yerel rollback çalıştıracaksanız açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası değiştirilebilir. İsteğe bağlı Company Reporting komutları, aynı Python ortamında kurulu bir paket/adapter üzerinden yüklenir; listener başka bir checkout'u `sys.path` ile çalışma zamanında enjekte etmez. Bağımsız listener kullanılıyorsa işlenmiş Telegram update kimlikleri varsayılan olarak `~/.hermes_local_automation/telegram/update_state.json` dosyasında kalıcı tutulur; `TELEGRAM_UPDATE_STATE_FILE` ile değiştirilebilir.
+Apple Mail yalnızca yerel rollback çalıştıracaksanız açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası değiştirilebilir. İsteğe bağlı Company Reporting komutları, aynı Python ortamında kurulu bir paket/adapter üzerinden yüklenir; listener başka bir checkout'u `sys.path` ile çalışma zamanında enjekte etmez. Bağımsız listener kullanılıyorsa işlenmiş Telegram update kimlikleri ve geçici deneme sayaçları varsayılan olarak `~/.hermes_local_automation/telegram/update_state.json` dosyasında kalıcı tutulur; `TELEGRAM_UPDATE_STATE_FILE` ile değiştirilebilir. Yanıt teslim edilemeyen güncelleme en fazla üç kez denenir; poll hatalarının beklemesi 5 saniyeden başlayıp 60 saniyeye kadar artar ve başarılı poll sonrasında sıfırlanır.
 
 ## Yapılandırma
 
@@ -184,8 +184,12 @@ Uygulama ayarları aşağıdaki ortam değişkenlerinden veya Telegram kimlik bi
 | Değişken | Kullanım ve varsayılan |
 |---|---|
 | `MAIL_SOURCE` | Mail kaynağı; varsayılan `gmail`, Apple Mail için açıkça `apple_mail`. |
+| `MAIL_DIGEST_TARGET_EMAIL` | Tek hedef Gmail/Apple Mail hesabı; önce ortam değişkeni, yoksa `~/.hermes_local_automation/mail_digest/target.env` dosyası kullanılır. Sentetik biçim örneği: `user@example.com`. |
+| `MAIL_DIGEST_TARGET_ENV_FILE` | Hedef hesabın private env dosyasının yolu; varsayılan `~/.hermes_local_automation/mail_digest/target.env`. |
 | `MAIL_DIGEST_LOCK_FILE` | Ortak digest kilidi; varsayılan `/tmp/mail_unread_digest.lock`. |
 | `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` | Planlı 08:00 özetinin ortak kilidi bekleme süresi; varsayılan `300` saniye. |
+| `MAIL_DIGEST_DAILY_DEADLINE` | `/durum` içinde planlı özetin gecikmiş sayılacağı saat (`HH:MM`); varsayılan `08:15`. |
+| `MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS` | Deploy Gmail ön kontrolünün ortak üretim kilidini bekleme süresi; varsayılan ve üst sınır `120` saniye. |
 | `MAIL_DIGEST_PARSE_CACHE_FILE` | Parse cache SQLite yolu; varsayılan `~/.hermes_local_automation/mail_digest/parse_cache.sqlite3`. |
 | `MAIL_DIGEST_STATUS_FILE` | Çalışma durumu JSON yolu; varsayılan `~/.hermes_local_automation/mail_digest/status.json`. |
 | `GMAIL_CREDENTIALS_FILE` | Gmail OAuth client dosyası; varsayılan `~/.hermes_local_automation/gmail/credentials.json`. |
@@ -203,11 +207,17 @@ Uygulama ayarları aşağıdaki ortam değişkenlerinden veya Telegram kimlik bi
 | `TELEGRAM_UPDATE_STATE_FILE` | Polling update kimlik state'i; varsayılan `~/.hermes_local_automation/telegram/update_state.json`. |
 | `LISTENER_CONFLICT_BACKOFF_SECONDS` | Telegram getUpdates 409 çakışmasından sonra bekleme; varsayılan `300` saniye. Test ve kontrollü kullanımda `0` verilebilir. |
 
+Batch, bekleme, kilit ve state dosyası ayarları ilgili işlem başladığında okunur; süreç çalışırken `os.environ` üzerinden değiştirilen değerler sonraki işlemde görülür. Sayısal bir ayar geçersizse onu kullanan işlem açık bir yapılandırma hatası verir; `/durum` geçersiz batch, kilit bekleme veya hatırlatma ayarlarını uyarı olarak gösterir. Özel JSON state ve OAuth token dosyaları ortak atomik yazıcıyla aynı dizindeki geçici dosyaya yazılır, `0600` izinle fsync edilip atomik olarak değiştirilir; gerekli kullanıcı state dizinleri `0700` tutulur. Bozuk hatırlatma state'i hata sınıfı loglanarak `.corrupt` uzantısıyla karantinaya alınır.
+
 Telegram token'ını veya gerçek sohbet/kullanıcı kimliklerini kaynak koda, loglara ya da fixture'lara yazmayın.
+
+### Yükseltme notu
+
+Mac Mini'ye deploy etmeden önce `~/.hermes_local_automation/mail_digest/target.env` dosyasını oluşturun. Dosyada yalnızca `MAIL_DIGEST_TARGET_EMAIL=user@example.com` biçiminde tek satır bulunmalı ve izinleri `0600` olmalıdır. Örnekteki sentetik adresi kendi hedef Gmail adresinizle değiştirin; `MAIL_DIGEST_TARGET_EMAIL` ortam değişkeni varsa dosyaya göre önceliklidir. İsterseniz dosya yolunu `MAIL_DIGEST_TARGET_ENV_FILE` ile belirleyebilirsiniz.
 
 ## Gmail API kurulumu ve production kullanımı
 
-Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth kapsamını ister. Kod mesajları değiştirmez, etiketlemez, okundu durumunu değiştirmez, taşımaz, silmez veya göndermez. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest de başarısız olur.
+Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth kapsamını ister. Her full ve incremental sync `getProfile` yanıtındaki `emailAddress` alanını yapılandırılmış hedefle büyük/küçük harf duyarsız karşılaştırır; eşleşmiyorsa cache veya checkpoint değiştirilmeden işlem reddedilir ve hesap adresleri loglanmaz. Kod mesajları değiştirmez, etiketlemez, okundu durumunu değiştirmez, taşımaz, silmez veya göndermez. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest de başarısız olur.
 
 1. Google Cloud projesinde Gmail API'yi etkinleştirin ve Desktop application OAuth istemcisi oluşturun. OAuth doğrulamasının tamamlandığı varsayılmaz; bu operatör adımıdır.
 2. İndirilen istemci dosyasını `~/.hermes_local_automation/gmail/credentials.json` konumuna koyun ve `chmod 600` uygulayın.
@@ -266,13 +276,13 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Mac Studio ve MacBook Pro geliştirme içindir.
 - Mac Mini tek runtime/production makinesidir.
 - `telegram_listener.py`, bu botun tek Telegram polling ve komut sahibidir. Aynı token için başka bir polling süreci veya webhook çalıştırmayın; deploy betiği launchd içinde Hermes işi görürse durur.
-- 08:00 summary plist'i `main.py --scheduled` çağırır ve ortak kilidi varsayılan 300 saniyeye kadar `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` ayarıyla bekler. Kilit yine doluysa `status.json` içinde `daily_scheduled` için `skipped_lock` sonucu kaydedilir ve süreç `75` koduyla çıkar. Telegram komutları `daily` anahtarını kullanır; manuel başarı planlı özetin durumunu gizlemez. `/durum`, planlı özetin henüz zamanı gelmediğini, gönderildiğini, başarısız olduğunu veya kilit nedeniyle atlandığını gösterir. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Diğer CLI çağrıları varsayılan olarak hemen döner; bağımsız Telegram listener aynı kilidi 30 saniyeye kadar 0,5 saniyelik aralıklarla bekler. Dosyanın diskte kalması stale-lock oluşturmaz.
+- 08:00 summary plist'i `main.py --scheduled` çağırır ve ortak kilidi varsayılan 300 saniyeye kadar `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` ayarıyla bekler. Kilit yine doluysa `status.json` içinde `daily_scheduled` için `skipped_lock` sonucu kaydedilir ve süreç `75` koduyla çıkar. Telegram komutları `daily` anahtarını kullanır; manuel başarı planlı özetin durumunu gizlemez. `/durum`, `MAIL_DIGEST_DAILY_DEADLINE` varsayılan saati olan 08:15'ten önce kaydı olmayan planlı özeti `bekleniyor` gösterir; bu saatten sonra başarı yoksa, kilit nedeniyle atlandıysa veya hata aldıysa nedeni ile uyarır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Diğer CLI çağrıları varsayılan olarak hemen döner; bağımsız Telegram listener aynı kilidi 30 saniyeye kadar 0,5 saniyelik aralıklarla bekler. Dosyanın diskte kalması stale-lock oluşturmaz.
 - CLI ve listener başlangıcında yalnızca o sürecin launchd logları döndürülür; iki süreç diğerinin loglarına dokunmaz ve dosya sistemi hataları digest akışını durdurmaz. Listener launchd işi `ThrottleInterval=30` ile çökme döngülerini sınırlar.
 - Üç launchd plist şablonu `PYTHONUNBUFFERED=1` ayarlar; ayrıca listener'daki her `print()` `flush=True` kullanır. Başlangıç, komut ve hata çıktıları böylece tamponda beklemeden launchd loglarına yazılır.
 - Beş dakikalık hatırlatma görevi de aynı `run_digest()` ve `flock` akışını kullanır; günlük özet veya Telegram komutuyla çakışırsa güvenli biçimde o turu atlar.
 - Hatırlatma taraması `(son başarılı tarama, şimdi + lead time]` aralığını yakalar; ilk taramada küçük bir kurtarma örtüşmesi kullanılır. State cursor'ı yalnızca tarama ve gönderim başarılı olunca ilerler.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
-- Mac Mini için bu depodaki `scripts/deploy_mac_mini.sh` kullanılır. Varsayılanı kontrol ve önizleme yapar; summary, reminder ve listener plist'lerini yazma ile launchd `bootout`/`bootstrap` işlemleri yalnızca `--apply` verildiğinde yapılır. `--apply` bu kod değişikliği sırasında çalıştırılmaz.
+- Mac Mini için bu depodaki `scripts/deploy_mac_mini.sh` kullanılır. Varsayılan mod sırasıyla `git pull --ff-only`, `.venv/bin/python -m pip install -r requirements.lock`, kalite kontrolleri ve Gmail ön kontrolünü çalıştırır; ardından plist'leri önizler. Gmail ön kontrolü ortak üretim kilidini varsayılan olarak en fazla 120 saniye bekler; kilidi alamazsa `75` koduyla çıkar ve üretim işi çalıştığını bildirir. Plist yazma ve launchd `bootout`/`bootstrap` işlemleri yalnızca `--apply` verildiğinde yapılır.
 - `--apply`, her launchd label'ı için `bootout` sonrasında `launchctl print` başarısız olana dek en çok 30 saniye bekler; ardından `bootstrap` işlemini üç kez dener ve başarısız denemelerin hata metnini yazar. `DEPLOY_WAIT_STEP_SECONDS` bekleme adımını saniye cinsinden ayarlar (varsayılan `1`); bootstrap denemeleri arasındaki bekleme bunun üç katıdır. Sentetik deploy testlerinde `DEPLOY_WAIT_STEP_SECONDS=0` beklemeleri atlar.
 - Deploy ön kontrolü `.venv/bin/python` ve `python -m pip` işleyişini doğrular; bozuk venv için elle yeniden oluşturma komutunu bildirir ve venv'i otomatik değiştirmez. `ruff` ve `pyright`, yalnızca kendi `--version` kontrolleri başarılıysa kullanılır.
 - Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz.
@@ -292,6 +302,6 @@ Test kapsamı parser matrisi, ICS/deduplication regresyonları, anonim Mail fixt
 
 Noktalı tarih/saat bağlamı her token için yalnızca yakındaki metin penceresinde aranır. `tests/test_parser_performance.py`, 100 anonim sentetik mesajın günlük özetini ve sabit toplantı sayısını doğrular. `python scripts/bench_parser.py --cache` daily, weekly, upcoming ve reminder sürelerini önbelleksiz, soğuk ve sıcak önbellek koşullarında ölçer; yalnızca geçici cache dosyaları kullanır.
 
-Ayrıştırma çıktısını etkileyen her değişiklikte `mail_digest/parsing/__init__.py` içindeki `PARSER_VERSION` artırılır; böylece eski parse-cache kayıtları kullanılmaz. Cache girdileri her çalışmada, başlangıç aralığı bugünden iki günden daha eski olanlar için temizlenir.
+Ayrıştırma çıktısını etkileyen her değişiklikte `mail_digest/parsing/__init__.py` içindeki `PARSER_VERSION` artırılır; böylece eski parse-cache kayıtları kullanılmaz. Parse-cache anahtarı mesaj metninin yanında `source_received_at` ve Gmail `internal_date_ms` tazeliğini de içerir. Cache girdileri her çalışmada, başlangıç aralığı bugünden iki günden daha eski olanlar için temizlenir.
 
 Mail erişimi ve Telegram gönderimi salt-okunur operasyon mantığıyla tasarlanmıştır: mesaj silme, taşıma, işaretleme, cevaplama, yönlendirme veya taslak oluşturma yapılmaz.

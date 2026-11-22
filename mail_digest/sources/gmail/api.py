@@ -16,7 +16,7 @@ import httplib2
 from google.auth.exceptions import TransportError
 from googleapiclient.errors import HttpError
 
-from ...config import GMAIL_BATCH_PAUSE_SECONDS, GMAIL_BATCH_SIZE
+from ...config import gmail_batch_pause_seconds, gmail_batch_size
 
 RATE_LIMIT_MAX_ATTEMPTS = 6
 
@@ -39,7 +39,7 @@ class GmailApi:
         service,
         max_attempts=3,
         sleep=time.sleep,
-        batch_pause_seconds=GMAIL_BATCH_PAUSE_SECONDS,
+        batch_pause_seconds=None,
     ):
         self.service = service
         self.max_attempts = max_attempts
@@ -133,8 +133,13 @@ class GmailApi:
         return min(32, 2 ** attempt) + random.uniform(0, 1)
 
     def _pause_between_batches(self):
-        if self.batch_pause_seconds > 0:
-            self.sleep(self.batch_pause_seconds)
+        pause_seconds = (
+            gmail_batch_pause_seconds()
+            if self.batch_pause_seconds is None
+            else self.batch_pause_seconds
+        )
+        if pause_seconds > 0:
+            self.sleep(pause_seconds)
 
     @classmethod
     def _rate_limit_delay_for_errors(cls, exceptions, attempt):
@@ -259,10 +264,11 @@ class GmailApi:
 
         message_ids = list(dict.fromkeys(ids))
         results = {}
-        for offset in range(0, len(message_ids), GMAIL_BATCH_SIZE):
-            group = message_ids[offset:offset + GMAIL_BATCH_SIZE]
+        batch_size = gmail_batch_size()
+        for offset in range(0, len(message_ids), batch_size):
+            group = message_ids[offset:offset + batch_size]
             results.update(self._fetch_batch_group(group, format))
-            if offset + GMAIL_BATCH_SIZE < len(message_ids):
+            if offset + batch_size < len(message_ids):
                 self._pause_between_batches()
         return results
 

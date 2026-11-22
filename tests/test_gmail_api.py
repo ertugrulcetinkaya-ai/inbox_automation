@@ -86,9 +86,8 @@ class GmailApiTests(unittest.TestCase):
             [
                 sys.executable,
                 "-c",
-                "from mail_digest.config import GMAIL_BATCH_SIZE, GMAIL_BATCH_PAUSE_SECONDS; "
-                "from mail_digest.sources.gmail.sync import FETCH_BATCH_SIZE; "
-                "print(GMAIL_BATCH_SIZE, FETCH_BATCH_SIZE, GMAIL_BATCH_PAUSE_SECONDS)",
+                "from mail_digest.config import gmail_batch_size, gmail_batch_pause_seconds; "
+                "print(gmail_batch_size(), gmail_batch_size(), gmail_batch_pause_seconds())",
             ],
             cwd=Path(__file__).resolve().parents[1],
             env=environment,
@@ -102,7 +101,13 @@ class GmailApiTests(unittest.TestCase):
 
         environment["GMAIL_BATCH_SIZE"] = "51"
         invalid = subprocess.run(
-            [sys.executable, "-c", "import mail_digest.config"],
+            [
+                sys.executable,
+                "-c",
+                "import telegram_listener; "
+                "from mail_digest.config import gmail_batch_size; "
+                "gmail_batch_size()",
+            ],
             cwd=Path(__file__).resolve().parents[1],
             env=environment,
             text=True,
@@ -111,6 +116,34 @@ class GmailApiTests(unittest.TestCase):
         )
         self.assertNotEqual(invalid.returncode, 0)
         self.assertIn("GMAIL_BATCH_SIZE must be between 1 and 50", invalid.stderr)
+
+    def test_api_uses_batch_and_pause_environment_at_operation_time(self):
+        ids = ["synthetic-1", "synthetic-2", "synthetic-3"]
+        service = FakeBatchService(
+            {message_id: [{"id": message_id}] for message_id in ids}
+        )
+        sleeps = []
+        api = GmailApi(service, sleep=sleeps.append)
+
+        with patch.dict(
+            os.environ,
+            {"GMAIL_BATCH_SIZE": "2", "GMAIL_BATCH_PAUSE_SECONDS": "0.25"},
+        ):
+            self.assertEqual(len(api.get_messages_batch(ids)), 3)
+        self.assertEqual(service.batch_sizes, [2, 1])
+        self.assertEqual(sleeps, [0.25])
+
+        service = FakeBatchService(
+            {message_id: [{"id": message_id}] for message_id in ids}
+        )
+        api = GmailApi(service, sleep=sleeps.append)
+        with patch.dict(
+            os.environ,
+            {"GMAIL_BATCH_SIZE": "1", "GMAIL_BATCH_PAUSE_SECONDS": "0"},
+        ):
+            self.assertEqual(len(api.get_messages_batch(ids)), 3)
+        self.assertEqual(service.batch_sizes, [1, 1, 1])
+        self.assertEqual(sleeps, [0.25])
 
     def test_transient_failure_retries_with_bound(self):
         outcomes = [http_error(503), {"ok": True}]
@@ -205,9 +238,10 @@ class GmailApiTests(unittest.TestCase):
         )
 
     def test_batch_fetches_in_configured_groups(self):
-        from mail_digest.config import GMAIL_BATCH_SIZE
+        from mail_digest.config import gmail_batch_size
 
-        ids = [f"synthetic-{index}" for index in range(2 * GMAIL_BATCH_SIZE + 1)]
+        batch_size = gmail_batch_size()
+        ids = [f"synthetic-{index}" for index in range(2 * batch_size + 1)]
         service = FakeBatchService(
             {message_id: [{"id": message_id}] for message_id in ids}
         )
@@ -217,13 +251,13 @@ class GmailApiTests(unittest.TestCase):
         self.assertEqual(len(results), len(ids))
         self.assertEqual(
             service.batch_sizes,
-            [GMAIL_BATCH_SIZE, GMAIL_BATCH_SIZE, 1],
+            [batch_size, batch_size, 1],
         )
 
     def test_batch_pause_is_injected_between_groups(self):
-        from mail_digest.config import GMAIL_BATCH_SIZE
+        from mail_digest.config import gmail_batch_size
 
-        ids = [f"synthetic-{index}" for index in range(GMAIL_BATCH_SIZE + 1)]
+        ids = [f"synthetic-{index}" for index in range(gmail_batch_size() + 1)]
         service = FakeBatchService(
             {message_id: [{"id": message_id}] for message_id in ids}
         )

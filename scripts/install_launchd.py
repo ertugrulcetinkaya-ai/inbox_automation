@@ -10,10 +10,19 @@ from __future__ import annotations
 
 import argparse
 import plistlib
+import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from mail_digest.config import (  # noqa: E402
+    TargetEmailConfigurationError,
+    target_email as configured_target_email,
+)
+
+
 TEMPLATE_ROOT = PROJECT_ROOT / "launchd"
 LAUNCH_AGENTS_ROOT = Path.home() / "Library" / "LaunchAgents"
 
@@ -31,6 +40,7 @@ def render_template(
     gmail_token_file=None,
     gmail_cache_file=None,
     reminder_minutes=15,
+    target_account=None,
 ) -> bytes:
     gmail_root = Path.home() / ".hermes_local_automation" / "gmail"
     text = template_path.read_text(encoding="utf-8")
@@ -42,6 +52,9 @@ def render_template(
         "__GMAIL_TOKEN_FILE__": str(gmail_token_file or gmail_root / "token.json"),
         "__GMAIL_CACHE_FILE__": str(gmail_cache_file or gmail_root / "cache.sqlite3"),
         "__MEETING_REMINDER_MINUTES__": str(reminder_minutes),
+        "__MAIL_DIGEST_TARGET_EMAIL__": str(
+            target_account or configured_target_email()
+        ),
     }
     for marker, value in replacements.items():
         rendered = rendered.replace(marker, value)
@@ -81,6 +94,13 @@ def main() -> int:
     if args.reminder_minutes <= 0:
         parser.error("--reminder-minutes must be a positive integer")
 
+    try:
+        target_account = configured_target_email()
+    except TargetEmailConfigurationError:
+        parser.error(
+            "MAIL_DIGEST_TARGET_EMAIL ayarlayın veya private target.env dosyasını oluşturun"
+        )
+
     selected = ["summary", "reminder"]
     if args.include_listener:
         selected.append("listener")
@@ -93,6 +113,7 @@ def main() -> int:
             gmail_token_file=args.gmail_token_file,
             gmail_cache_file=args.gmail_cache_file,
             reminder_minutes=args.reminder_minutes,
+            target_account=target_account,
         )
         for key in selected
     }

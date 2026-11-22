@@ -7,16 +7,21 @@ import os
 import sqlite3
 import stat
 from datetime import datetime, time as datetime_time, timedelta
-from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from ..config import (
     LOCAL_TIMEZONE_NAME,
-    REMINDER_STATE_FILE,
+    daily_lock_wait_seconds,
+    preflight_lock_wait_seconds,
+    gmail_batch_pause_seconds,
+    gmail_batch_size,
     gmail_cache_file,
     gmail_token_file,
     local_now,
+    reminder_minutes,
+    reminder_state_file,
+    reminder_window_minutes,
 )
 from ..sources import selected_source_name
 from .reminder_state import load_last_successful_reminder_scan
@@ -140,9 +145,23 @@ def _format_time(value):
     return value.strftime("%Y-%m-%d %H:%M") if value is not None else "yok"
 
 
-def _scheduled_daily_status(modes, now):
-    if now.time() < datetime_time(8, 0):
-        return "henüz zamanı gelmedi", False
+def _daily_deadline():
+    value = os.environ.get("MAIL_DIGEST_DAILY_DEADLINE", "08:15")
+    if (
+        not isinstance(value, str)
+        or len(value) != 5
+        or value[2] != ":"
+        or not value[:2].isdigit()
+        or not value[3:].isdigit()
+    ):
+        raise ValueError("MAIL_DIGEST_DAILY_DEADLINE must use HH:MM")
+    hour, minute = int(value[:2]), int(value[3:])
+    if hour > 23 or minute > 59:
+        raise ValueError("MAIL_DIGEST_DAILY_DEADLINE must use HH:MM")
+    return datetime_time(hour, minute)
+
+
+def _scheduled_daily_status(modes, now, deadline):
 
     entry = modes.get("daily_scheduled")
     if not isinstance(entry, dict):
@@ -165,7 +184,14 @@ def _scheduled_daily_status(modes, now):
     ):
         return "atlandı (kilit dolu)", False
     if failure_today is not None:
+        error_type = entry.get("last_error_type")
+        if error_type == "skipped_lock":
+            return "atlandı (kilit dolu)", False
+        if isinstance(error_type, str) and error_type.isidentifier():
+            return f"başarısız ({error_type})", False
         return "başarısız", False
+    if now.time() < deadline:
+        return "bekleniyor", False
     return "henüz gönderilmedi", False
 
 
@@ -198,7 +224,15 @@ def build_status_report(now=None):
             detail += f"; skipped_lock {_format_time(skipped)}"
         lines.append(detail)
 
-    scheduled_status, scheduled_succeeded = _scheduled_daily_status(modes, now)
+    deadline_invalid = False
+    try:
+        daily_deadline = _daily_deadline()
+    except ValueError:
+        daily_deadline = datetime_time(8, 15)
+        deadline_invalid = True
+    scheduled_status, scheduled_succeeded = _scheduled_daily_status(
+        modes, now, daily_deadline
+    )
     lines.append(f"Planlı günlük özet (08:00): {scheduled_status}")
 
     token_text, token_problems = _token_status(now)
@@ -219,17 +253,28 @@ def build_status_report(now=None):
     else:
         lines.append("Gmail önbelleği: yok")
 
-    reminder_path = Path(
-        os.environ.get("MEETING_REMINDER_STATE_FILE", str(REMINDER_STATE_FILE))
-    ).expanduser()
     reminder_scan = load_last_successful_reminder_scan(
-        state_file=reminder_path,
+        state_file=reminder_state_file(),
         now=now,
     )
     lines.append(f"Son hatırlatma taraması: {_format_time(reminder_scan)}")
 
     warnings = []
-    if now.time() >= datetime_time(8, 0) and not scheduled_succeeded:
+    if deadline_invalid:
+        warnings.append("⚠️ Yapılandırma hatası: MAIL_DIGEST_DAILY_DEADLINE")
+    for variable_name, read_setting in (
+        ("GMAIL_BATCH_SIZE", gmail_batch_size),
+        ("GMAIL_BATCH_PAUSE_SECONDS", gmail_batch_pause_seconds),
+        ("MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS", daily_lock_wait_seconds),
+        ("MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS", preflight_lock_wait_seconds),
+        ("MEETING_REMINDER_MINUTES", reminder_minutes),
+        ("MEETING_REMINDER_WINDOW_MINUTES", reminder_window_minutes),
+    ):
+        try:
+            read_setting()
+        except ValueError:
+            warnings.append(f"⚠️ Yapılandırma hatası: {variable_name}")
+    if now.time() >= daily_deadline and not scheduled_succeeded:
         warnings.append(
             f"⚠️ bugünkü planlı özet gönderilmedi: {scheduled_status}"
         )

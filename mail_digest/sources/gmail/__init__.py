@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from ...config import gmail_cache_file, log
+from ...config import TargetEmailConfigurationError, gmail_cache_file, log, target_email
 from .api import GmailApi, GmailApiError
 from .auth import GmailAuthError, build_service
 from .mime import MessageStructureError
@@ -13,11 +13,20 @@ from .sync import GmailSynchronizer, GmailSyncError
 def fetch_mail():
     store = None
     try:
+        account = target_email()
         service = build_service()
         api = GmailApi(service)
-        store = GmailStore(gmail_cache_file())
+        store = GmailStore(gmail_cache_file(), account=account)
         return GmailSynchronizer(api, store).sync()
-    except (GmailAuthError, GmailApiError, GmailSyncError, MessageStructureError, OSError, sqlite3.Error) as exc:
+    except (
+        GmailAuthError,
+        GmailApiError,
+        GmailSyncError,
+        MessageStructureError,
+        TargetEmailConfigurationError,
+        OSError,
+        sqlite3.Error,
+    ) as exc:
         log(
             "Gmail sync failed "
             f"({type(exc).__name__}: {exc}); run scripts/gmail_auth.py "

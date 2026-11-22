@@ -10,7 +10,6 @@ from mail_digest.config import (
     APPLE_SCRIPT_TIMEOUT_SECONDS,
     CALENDAR_MARKERS,
     ENGLISH_MONTHS,
-    ENV_FILE,
     FIELD_DELIMITER,
     ICS_MARKERS,
     LOCAL_TIMEZONE_NAME,
@@ -21,12 +20,13 @@ from mail_digest.config import (
     SEMANTIC_RESCHEDULED_RE,
     SEMANTIC_TENTATIVE_RE,
     SCRIPT_PATH,
-    TARGET_EMAIL,
     TRANSPORT_NEWLINE_TOKEN,
     TURKISH_MONTHS,
     YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS,
     load_env,
     log,
+    target_email,
+    telegram_env_file,
 )
 from mail_digest.delivery.telegram import send_telegram
 from mail_digest.models import Meeting, MeetingOccurrence, MeetingStatus
@@ -60,7 +60,6 @@ __all__ = [
     "APPLE_SCRIPT_TIMEOUT_SECONDS",
     "CALENDAR_MARKERS",
     "ENGLISH_MONTHS",
-    "ENV_FILE",
     "FIELD_DELIMITER",
     "ICS_MARKERS",
     "LOCAL_TIMEZONE_NAME",
@@ -71,12 +70,12 @@ __all__ = [
     "SEMANTIC_RESCHEDULED_RE",
     "SEMANTIC_TENTATIVE_RE",
     "SCRIPT_PATH",
-    "TARGET_EMAIL",
     "TRANSPORT_NEWLINE_TOKEN",
     "TURKISH_MONTHS",
     "YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS",
     "load_env",
     "log",
+    "target_email",
     "send_telegram",
     "Meeting",
     "MeetingOccurrence",
@@ -103,6 +102,12 @@ __all__ = [
     "strip_quoted_reply",
     "main",
 ]
+
+
+def __getattr__(name):
+    if name == "ENV_FILE":
+        return telegram_env_file()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":

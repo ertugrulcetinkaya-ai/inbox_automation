@@ -50,6 +50,16 @@ def _meeting_field_table(readme):
 def _literal_env_names(tree):
     names = set()
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "environ"
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+            and ENV_PREFIX_RE.match(node.slice.value)
+        ):
+            names.add(node.slice.value)
+            continue
         if not isinstance(node, ast.Call):
             continue
         function = node.func

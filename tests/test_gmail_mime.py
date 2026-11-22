@@ -1,4 +1,5 @@
 import base64
+import os
 import unittest
 from datetime import date
 from unittest.mock import patch
@@ -37,6 +38,13 @@ def payload(parts=None, mime_type="multipart/mixed", data=None, headers=None, fi
 
 
 class GmailMimeTests(unittest.TestCase):
+    def setUp(self):
+        self.target_environment = patch.dict(
+            os.environ, {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}
+        )
+        self.target_environment.start()
+        self.addCleanup(self.target_environment.stop)
+
     def normalize(self, value, attachments=None):
         self.attachment_calls = []
         self.raw_calls = []

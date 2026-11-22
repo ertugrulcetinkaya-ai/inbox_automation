@@ -20,6 +20,7 @@ from ..parsing.ics import (
     parse_ics_event_definitions,
     recurrence_identity,
 )
+from ..parsing.lifecycle import lifecycle_should_replace
 from ..parsing.meeting_parser import _meeting_to_digest_record, extract_meetings
 from .parse_cache import ParseCache, ParseCacheUnavailable, cache_key
 from ..utils import record_source_received_at
@@ -121,13 +122,6 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
 
     meetings = [meeting for parsed in parsed_records for meeting in parsed]
 
-    status_priority = {
-        "CONFIRMED": 0,
-        "TENTATIVE": 1,
-        "RESCHEDULED": 2,
-        "CANCELLED": 3,
-    }
-
     def text_key(value):
         return re.sub(r"\W+", " ", str(value or "").casefold()).strip()
 
@@ -196,8 +190,18 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
         side lacks a thread (Apple Mail or older cache records), fall back to
         canonical sender email plus normalized subject family. A date-only
         lifecycle update deliberately matches any time on that date, while a
-        timed update remains exact.
+        timed update remains exact. Semantic updates must be strictly newer
+        than the candidate and cannot replace UID-backed calendar authority.
         """
+
+        if candidate.get("uid"):
+            return False
+        update_received_at = record_source_received_at(update)
+        candidate_received_at = record_source_received_at(candidate)
+        if update_received_at is None or candidate_received_at is None:
+            return False
+        if update_received_at <= candidate_received_at:
+            return False
 
         update_date, update_minutes = occurrence_parts(update, update_start_at)
         candidate_date, candidate_minutes = occurrence_parts(candidate)
@@ -220,26 +224,8 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
         recurrence_id = meeting.get("recurrence_id")
         return uid, recurrence_identity(recurrence_id)
 
-    def freshness_key(meeting):
-        received_at = record_source_received_at(meeting)
-        if received_at is None:
-            return (0, 0.0)
-        return (1, received_at.timestamp())
-
     def should_replace(current, candidate):
-        if candidate.get("sequence", 0) != current.get("sequence", 0):
-            return candidate.get("sequence", 0) > current.get("sequence", 0)
-        candidate_priority = status_priority.get(candidate.get("status"), 0)
-        current_priority = status_priority.get(current.get("status"), 0)
-        if candidate_priority != current_priority:
-            return candidate_priority > current_priority
-        candidate_freshness = freshness_key(candidate)
-        current_freshness = freshness_key(current)
-        if candidate_freshness != current_freshness:
-            return candidate_freshness > current_freshness
-        # Equal timestamps are unusual, but a stable final tie-breaker keeps
-        # aggregation independent of Gmail's record ordering.
-        return candidate.get("source_message_id", "") > current.get("source_message_id", "")
+        return lifecycle_should_replace(current, candidate)
 
     masters = {}
     overrides = {}

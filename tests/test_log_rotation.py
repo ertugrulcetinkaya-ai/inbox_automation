@@ -65,10 +65,18 @@ class LogRotationTests(unittest.TestCase):
 
         cli_names = set()
         for template_name in ("summary", "reminder"):
-            rendered = plistlib.loads(render_template(TEMPLATES[template_name]))
+            rendered = plistlib.loads(
+                render_template(
+                    TEMPLATES[template_name], target_account="user@example.com"
+                )
+            )
             cli_names.add(Path(rendered["StandardOutPath"]).name)
             cli_names.add(Path(rendered["StandardErrorPath"]).name)
-        listener = plistlib.loads(render_template(TEMPLATES["listener"]))
+        listener = plistlib.loads(
+            render_template(
+                TEMPLATES["listener"], target_account="user@example.com"
+            )
+        )
         listener_names = {
             Path(listener["StandardOutPath"]).name,
             Path(listener["StandardErrorPath"]).name,
@@ -116,7 +124,11 @@ class LogRotationTests(unittest.TestCase):
     def test_listener_plist_has_throttle_interval(self):
         from scripts.install_launchd import TEMPLATES, render_template
 
-        rendered = plistlib.loads(render_template(TEMPLATES["listener"]))
+        rendered = plistlib.loads(
+            render_template(
+                TEMPLATES["listener"], target_account="user@example.com"
+            )
+        )
 
         self.assertEqual(rendered["ThrottleInterval"], 30)
 

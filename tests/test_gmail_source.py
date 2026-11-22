@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -57,6 +58,7 @@ class GmailSourceLogTests(unittest.TestCase):
 
         store = DummyStore()
         with (
+            patch.dict(os.environ, {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}),
             patch("mail_digest.sources.gmail.build_service", return_value=object()),
             patch("mail_digest.sources.gmail.GmailApi", return_value=object()),
             patch("mail_digest.sources.gmail.GmailStore", return_value=store),

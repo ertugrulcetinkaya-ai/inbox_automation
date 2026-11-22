@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -114,6 +115,19 @@ class HealthStatusTests(unittest.TestCase):
         get.assert_not_called()
         post.assert_not_called()
 
+    def test_scheduled_digest_waits_before_daily_deadline(self):
+        with patch.dict(os.environ, {"MAIL_DIGEST_DAILY_DEADLINE": "08:15"}):
+            report = build_status_report(now=datetime(2026, 11, 21, 7, 59))
+
+        self.assertIn("Planlı günlük özet (08:00): bekleniyor", report)
+        self.assertNotIn("bugünkü planlı özet gönderilmedi", report)
+
+    def test_missing_scheduled_digest_warns_after_daily_deadline(self):
+        with patch.dict(os.environ, {"MAIL_DIGEST_DAILY_DEADLINE": "08:15"}):
+            report = build_status_report(now=datetime(2026, 11, 21, 8, 20))
+
+        self.assertIn("bugünkü planlı özet gönderilmedi: henüz gönderilmedi", report)
+
     def test_corrupt_status_is_reported(self):
         self.status_path.write_text("not-json", encoding="utf-8")
 
@@ -161,7 +175,7 @@ class HealthStatusTests(unittest.TestCase):
 
         self.assertIn("• daily: son başarı 2026-11-21 12:00", report)
         self.assertIn("Planlı günlük özet (08:00): başarısız", report)
-        self.assertIn("bugünkü planlı özet gönderilmedi: başarısız", report)
+        self.assertIn("bugünkü planlı özet gönderilmedi: başarısız (ValueError)", report)
 
     def test_scheduled_daily_skip_is_recorded_and_reported(self):
         skipped_at = self.now.replace(hour=8, minute=1)
@@ -175,6 +189,33 @@ class HealthStatusTests(unittest.TestCase):
         report = build_status_report(now=self.now)
 
         self.assertIn("Planlı günlük özet (08:00): atlandı (kilit dolu)", report)
+        self.assertIn("bugünkü planlı özet gönderilmedi: atlandı (kilit dolu)", report)
+
+    def test_invalid_lazy_setting_does_not_break_listener_status_and_is_reported(self):
+        with patch.dict(os.environ, {"GMAIL_BATCH_SIZE": "51"}):
+            report = build_status_report(now=self.now)
+
+        self.assertIn("⚠️ Yapılandırma hatası: GMAIL_BATCH_SIZE", report)
+
+        environment = os.environ.copy()
+        environment["GMAIL_BATCH_SIZE"] = "51"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from datetime import datetime; import telegram_listener; "
+                "from mail_digest.services.health import build_status_report; "
+                "print(build_status_report(now=datetime(2026, 11, 21, 12)))",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("⚠️ Yapılandırma hatası: GMAIL_BATCH_SIZE", result.stdout)
 
     def test_token_with_broad_permissions_is_flagged(self):
         self.write_token(expiry=self.now + timedelta(days=1), permissions=0o644)
@@ -194,7 +235,7 @@ class HealthStatusTests(unittest.TestCase):
 
     def test_run_digest_records_start_and_result_with_private_permissions(self):
         lock_path = self.root / "digest.lock"
-        with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+        with patch.dict(os.environ, {"MAIL_DIGEST_LOCK_FILE": str(lock_path)}), patch(
             "mail_digest.cli._run_digest", return_value=0
         ):
             self.assertEqual(run_digest(mode="weekly"), 0)
@@ -218,7 +259,7 @@ class HealthStatusTests(unittest.TestCase):
 
     def test_run_digest_records_only_exception_class_on_failure(self):
         lock_path = self.root / "digest.lock"
-        with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+        with patch.dict(os.environ, {"MAIL_DIGEST_LOCK_FILE": str(lock_path)}), patch(
             "mail_digest.cli._run_digest", side_effect=ValueError("private content")
         ):
             with self.assertRaisesRegex(ValueError, "private content"):
@@ -232,7 +273,7 @@ class HealthStatusTests(unittest.TestCase):
 
     def test_nonzero_digest_result_records_failure(self):
         lock_path = self.root / "digest.lock"
-        with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+        with patch.dict(os.environ, {"MAIL_DIGEST_LOCK_FILE": str(lock_path)}), patch(
             "mail_digest.cli._run_digest", return_value=1
         ):
             self.assertEqual(run_digest(mode="daily"), 1)
@@ -245,7 +286,7 @@ class HealthStatusTests(unittest.TestCase):
         status_before = b'{"modes":{"daily":{"sentinel":"unchanged"}}}\n'
         self.status_path.write_bytes(status_before)
         lock_path = self.root / "digest.lock"
-        with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+        with patch.dict(os.environ, {"MAIL_DIGEST_LOCK_FILE": str(lock_path)}), patch(
             "mail_digest.cli._run_digest", return_value=0
         ), patch("mail_digest.cli.record_run_started") as started, patch(
             "mail_digest.cli.record_run_finished"

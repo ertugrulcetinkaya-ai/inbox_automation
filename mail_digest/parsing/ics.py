@@ -11,14 +11,59 @@ from email.parser import Parser
 
 from dateutil.rrule import rrulestr
 
-from ..config import ICS_MARKERS, LOCAL_TIMEZONE_NAME, local_now
+from ..config import LOCAL_TIMEZONE_NAME, local_now
 from ..models import Meeting
 from ..utils import record_source_received_at
 from .dates import parse_received_date
+from .lifecycle import lifecycle_should_replace
 
 
 MAX_RECURRENCES_PER_SERIES = 500
 DEFAULT_RECURRENCE_RANGE_DAYS = 60
+UNRESOLVED_TZID_COUNT = 0
+TIMEZONE_DEFINITIONS_PROPERTY = "_TIMEZONE_DEFINITIONS"
+
+WINDOWS_TO_IANA = {
+    "turkey": "Europe/Istanbul",
+    "turkey standard time": "Europe/Istanbul",
+    "gtb": "Europe/Bucharest",
+    "gtb standard time": "Europe/Bucharest",
+    "e. europe": "Europe/Chisinau",
+    "e. europe standard time": "Europe/Chisinau",
+    "w. europe": "Europe/Berlin",
+    "w. europe standard time": "Europe/Berlin",
+    "romance": "Europe/Paris",
+    "romance standard time": "Europe/Paris",
+    "central europe": "Europe/Budapest",
+    "central europe standard time": "Europe/Budapest",
+    "gmt": "Etc/GMT",
+    "gmt standard time": "Europe/London",
+    "utc": "Etc/UTC",
+    "eastern": "America/New_York",
+    "eastern standard time": "America/New_York",
+    "central": "America/Chicago",
+    "central standard time": "America/Chicago",
+    "mountain": "America/Denver",
+    "mountain standard time": "America/Denver",
+    "pacific": "America/Los_Angeles",
+    "pacific standard time": "America/Los_Angeles",
+    "india": "Asia/Kolkata",
+    "india standard time": "Asia/Kolkata",
+    "china": "Asia/Shanghai",
+    "china standard time": "Asia/Shanghai",
+    "tokyo": "Asia/Tokyo",
+    "tokyo standard time": "Asia/Tokyo",
+    "arabian": "Asia/Dubai",
+    "arabian standard time": "Asia/Dubai",
+    "russian standard time": "Europe/Moscow",
+}
+
+DURATION_RE = re.compile(
+    r"^(?P<sign>[+-])?P(?:(?P<weeks>\d+)W|(?:(?P<days>\d+)D)?"
+    r"(?:(?P<time>T)(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?"
+    r"(?:(?P<seconds>\d+)S)?)?)$",
+    re.IGNORECASE,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -46,22 +91,172 @@ def _unfold_ics_lines(text):
     return lines
 
 
+def _split_quoted(value, delimiter, maxsplit=-1):
+    parts = []
+    quoted = False
+    escaped = False
+    start = 0
+    splits = 0
+    for index, character in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\" and quoted:
+            escaped = True
+            continue
+        if character == '"':
+            quoted = not quoted
+            continue
+        if character == delimiter and not quoted and (maxsplit < 0 or splits < maxsplit):
+            parts.append(value[start:index])
+            start = index + 1
+            splits += 1
+    parts.append(value[start:])
+    return parts
+
+
 def _parse_ics_property(line):
-    if ":" not in line:
+    property_parts = _split_quoted(line, ":", maxsplit=1)
+    if len(property_parts) != 2:
         return None
-    name_and_params, value = line.split(":", 1)
-    parts = name_and_params.split(";")
+    name_and_params, value = property_parts
+    parts = _split_quoted(name_and_params, ";")
     name = parts[0].strip().upper()
     params = {}
     for part in parts[1:]:
-        if "=" not in part:
+        parameter_parts = _split_quoted(part, "=", maxsplit=1)
+        if len(parameter_parts) != 2:
             continue
-        key, param_value = part.split("=", 1)
+        key, param_value = parameter_parts
         params[key.strip().upper()] = param_value.strip().strip('"')
     return name, params, _ics_unescape(value)
 
 
-def _parse_ics_datetime(value, params):
+def _parse_timezone_offset(value):
+    match = re.fullmatch(r"([+-])(\d{2})(\d{2})(\d{2})?", (value or "").strip())
+    if match is None:
+        return None
+    sign = -1 if match.group(1) == "-" else 1
+    hours, minutes = int(match.group(2)), int(match.group(3))
+    seconds = int(match.group(4) or 0)
+    if hours >= 24 or minutes >= 60 or seconds >= 60:
+        return None
+    offset = timedelta(hours=hours, minutes=minutes, seconds=seconds) * sign
+    try:
+        return dt_timezone(offset)
+    except ValueError:
+        return None
+
+
+def _fixed_timezone_from_tzid(timezone_name):
+    match = re.fullmatch(
+        r"(?:UTC|GMT)([+-])(\d{1,2})(?::?(\d{2}))?(?::?(\d{2}))?",
+        (timezone_name or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    sign = -1 if match.group(1) == "-" else 1
+    hours = int(match.group(2))
+    minutes = int(match.group(3) or 0)
+    seconds = int(match.group(4) or 0)
+    if hours >= 24 or minutes >= 60 or seconds >= 60:
+        return None
+    try:
+        return dt_timezone(timedelta(hours=hours, minutes=minutes, seconds=seconds) * sign)
+    except ValueError:
+        return None
+
+
+def _ics_timezone_definitions(text):
+    definitions = {}
+    in_timezone = False
+    in_standard = False
+    timezone_name = ""
+    standard_offset = None
+    for line in _unfold_ics_lines(text):
+        marker = line.strip().upper()
+        if marker == "BEGIN:VTIMEZONE":
+            in_timezone = True
+            in_standard = False
+            timezone_name = ""
+            standard_offset = None
+            continue
+        if not in_timezone:
+            continue
+        if marker == "END:VTIMEZONE":
+            if timezone_name and standard_offset is not None:
+                definitions[timezone_name.casefold()] = standard_offset
+            in_timezone = False
+            in_standard = False
+            continue
+        if marker == "BEGIN:STANDARD":
+            in_standard = True
+            continue
+        if marker in {"END:STANDARD", "END:DAYLIGHT"}:
+            in_standard = False
+            continue
+        parsed = _parse_ics_property(line)
+        if parsed is None:
+            continue
+        name, _, value = parsed
+        if name == "TZID":
+            timezone_name = value
+        elif name == "TZOFFSETTO" and in_standard and standard_offset is None:
+            standard_offset = _parse_timezone_offset(value)
+    return definitions
+
+
+def _resolve_ics_timezone(timezone_name, timezone_definitions=None):
+    global UNRESOLVED_TZID_COUNT
+
+    fixed_timezone = _fixed_timezone_from_tzid(timezone_name)
+    if fixed_timezone is not None:
+        return fixed_timezone
+
+    normalized_name = timezone_name.casefold()
+    iana_name = WINDOWS_TO_IANA.get(normalized_name)
+    if iana_name is None and normalized_name.endswith(" standard time"):
+        iana_name = WINDOWS_TO_IANA.get(normalized_name[: -len(" standard time")])
+    if iana_name is not None and ZoneInfo is not None:
+        try:
+            return ZoneInfo(iana_name)
+        except (KeyError, ValueError):
+            pass
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(timezone_name)
+        except (KeyError, ValueError):
+            pass
+    fallback = (timezone_definitions or {}).get(normalized_name)
+    if fallback is not None:
+        return fallback
+    UNRESOLVED_TZID_COUNT += 1
+    return None
+
+
+def _parse_duration(value):
+    match = DURATION_RE.fullmatch((value or "").strip())
+    if match is None:
+        return None
+    groups = ("weeks", "days", "hours", "minutes", "seconds")
+    if not any(match.group(name) is not None for name in groups):
+        return None
+    if match.group("time") and not any(
+        match.group(name) is not None for name in ("hours", "minutes", "seconds")
+    ):
+        return None
+    duration = timedelta(
+        weeks=int(match.group("weeks") or 0),
+        days=int(match.group("days") or 0),
+        hours=int(match.group("hours") or 0),
+        minutes=int(match.group("minutes") or 0),
+        seconds=int(match.group("seconds") or 0),
+    )
+    return -duration if match.group("sign") == "-" else duration
+
+
+def _parse_ics_datetime(value, params, timezone_definitions=None):
     value = (value or "").strip()
     if not value:
         return None, ""
@@ -91,10 +286,11 @@ def _parse_ics_datetime(value, params):
 
     if is_utc:
         parsed = parsed.replace(tzinfo=dt_timezone.utc)
-    elif timezone_name and ZoneInfo is not None:
-        try:
-            parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
-        except (KeyError, ValueError):
+    elif timezone_name:
+        resolved_timezone = _resolve_ics_timezone(timezone_name, timezone_definitions)
+        if resolved_timezone is not None:
+            parsed = parsed.replace(tzinfo=resolved_timezone)
+        else:
             timezone_name = ""
     return parsed, timezone_name
 
@@ -122,6 +318,7 @@ def _extract_join_url(values):
 def _ics_event_blocks(text):
     blocks = []
     current = None
+    nested_depth = 0
     has_ics = False
     calendar_method = ""
     for line in _unfold_ics_lines(text):
@@ -137,12 +334,21 @@ def _ics_event_blocks(text):
         elif marker == "BEGIN:VEVENT":
             has_ics = True
             current = []
+            nested_depth = 0
         elif marker == "END:VEVENT":
-            if current is not None:
+            if current is not None and nested_depth == 0:
                 blocks.append((calendar_method, current))
-            current = None
+                current = None
+            elif current is not None and nested_depth > 0:
+                nested_depth -= 1
         elif current is not None:
-            current.append(line)
+            if marker.startswith("BEGIN:"):
+                nested_depth += 1
+            elif marker.startswith("END:"):
+                if nested_depth:
+                    nested_depth -= 1
+            elif nested_depth == 0:
+                current.append(line)
     return has_ics, blocks
 
 
@@ -185,59 +391,14 @@ def _ics_event_key(meeting):
     return meeting.uid, recurrence_identity(meeting.recurrence_id)
 
 
-def _ics_status_priority(status):
-    return {
-        "CONFIRMED": 0,
-        "TENTATIVE": 1,
-        "RESCHEDULED": 2,
-        "CANCELLED": 3,
-    }.get(status, 0)
-
-
 def _ics_should_replace(current, candidate):
-    if candidate.sequence != current.sequence:
-        return candidate.sequence > current.sequence
-    candidate_priority = _ics_status_priority(candidate.status)
-    current_priority = _ics_status_priority(current.status)
-    if candidate_priority != current_priority:
-        return candidate_priority > current_priority
-    candidate_received = record_source_received_at(
-        {"source_received_at": candidate.source_received_at}
-    )
-    current_received = record_source_received_at(
-        {"source_received_at": current.source_received_at}
-    )
-    if candidate_received != current_received:
-        if current_received is None:
-            return candidate_received is not None
-        if candidate_received is None:
-            return False
-        return candidate_received > current_received
-    return candidate.source_message_id > current.source_message_id
+    return lifecycle_should_replace(current, candidate)
 
 
 def ics_master_should_replace(current, candidate):
     """Choose a series master by SEQUENCE and then source freshness."""
 
-    if candidate.sequence != current.sequence:
-        return candidate.sequence > current.sequence
-    candidate_received = record_source_received_at(
-        {"source_received_at": candidate.source_received_at}
-    )
-    current_received = record_source_received_at(
-        {"source_received_at": current.source_received_at}
-    )
-    if candidate_received != current_received:
-        if current_received is None:
-            return candidate_received is not None
-        if candidate_received is None:
-            return False
-        return candidate_received > current_received
-    candidate_priority = _ics_status_priority(candidate.status)
-    current_priority = _ics_status_priority(current.status)
-    if candidate_priority != current_priority:
-        return candidate_priority > current_priority
-    return candidate.source_message_id > current.source_message_id
+    return lifecycle_should_replace(current, candidate)
 
 
 def _parse_ics_properties(lines):
@@ -251,7 +412,13 @@ def _parse_ics_properties(lines):
     return properties
 
 
-def _parse_ics_event(lines, record, calendar_method="", properties=None):
+def _parse_ics_event(
+    lines,
+    record,
+    calendar_method="",
+    properties=None,
+    timezone_definitions=None,
+):
     properties = properties if properties is not None else _parse_ics_properties(lines)
 
     _, summary = _ics_first(properties, "SUMMARY")
@@ -265,11 +432,16 @@ def _parse_ics_event(lines, record, calendar_method="", properties=None):
     normalized_status = _normalize_ics_status(status, calendar_method)
 
     start_params, start_value = _ics_first(properties, "DTSTART")
-    start_at, timezone_name = _parse_ics_datetime(start_value, start_params)
+    start_at, timezone_name = _parse_ics_datetime(
+        start_value,
+        start_params,
+        timezone_definitions,
+    )
     recurrence_params, recurrence_value = _ics_first(properties, "RECURRENCE-ID")
     recurrence_id, recurrence_timezone_name = _parse_ics_datetime(
         recurrence_value,
         recurrence_params,
+        timezone_definitions,
     )
     if recurrence_id is not None and not timezone_name:
         timezone_name = recurrence_timezone_name
@@ -283,8 +455,22 @@ def _parse_ics_event(lines, record, calendar_method="", properties=None):
         return None
 
     end_params, end_value = _ics_first(properties, "DTEND")
-    end_at, end_timezone_name = _parse_ics_datetime(end_value, end_params)
+    end_at, end_timezone_name = _parse_ics_datetime(
+        end_value,
+        end_params,
+        timezone_definitions,
+    )
     timezone_name = timezone_name or end_timezone_name
+    _, duration_value = _ics_first(properties, "DURATION")
+    duration = _parse_duration(duration_value)
+    if end_at is None and duration is not None:
+        if isinstance(start_at, datetime):
+            end_at = start_at + duration
+        elif isinstance(start_at, date):
+            if duration.seconds == 0 and duration.microseconds == 0:
+                end_at = start_at + timedelta(days=duration.days)
+            else:
+                end_at = datetime.combine(start_at, dt_time.min) + duration
 
     organizer = organizer_params.get("CN", "") or organizer_value
     if organizer.casefold().startswith("mailto:"):
@@ -327,8 +513,14 @@ def _rule_start(start_at):
     return datetime.combine(start_at, dt_time.min), True
 
 
-def _recurrence_datetime(value, params, rule_start, all_day):
-    parsed, _ = _parse_ics_datetime(value, params)
+def _recurrence_datetime(
+    value,
+    params,
+    rule_start,
+    all_day,
+    timezone_definitions=None,
+):
+    parsed, _ = _parse_ics_datetime(value, params, timezone_definitions)
     if parsed is None:
         return None
     if all_day:
@@ -416,6 +608,7 @@ def expand_ics_series(meeting, properties, range_start, range_end):
     date_values = properties.get("RDATE", [])
     if not rule_values and not date_values:
         return [meeting]
+    timezone_definitions = properties.get(TIMEZONE_DEFINITIONS_PROPERTY, {})
 
     lower_bound = _recurrence_bound(range_start, rule_start, all_day, False)
     upper_bound = _recurrence_bound(range_end, rule_start, all_day, True)
@@ -443,7 +636,13 @@ def expand_ics_series(meeting, properties, range_start, range_end):
 
     for params, values in date_values:
         for value in values.split(","):
-            parsed = _recurrence_datetime(value, params, rule_start, all_day)
+            parsed = _recurrence_datetime(
+                value,
+                params,
+                rule_start,
+                all_day,
+                timezone_definitions,
+            )
             if parsed is None:
                 continue
             if all_day:
@@ -453,7 +652,13 @@ def expand_ics_series(meeting, properties, range_start, range_end):
     excluded = set()
     for params, values in properties.get("EXDATE", []):
         for value in values.split(","):
-            parsed = _recurrence_datetime(value, params, rule_start, all_day)
+            parsed = _recurrence_datetime(
+                value,
+                params,
+                rule_start,
+                all_day,
+                timezone_definitions,
+            )
             if parsed is None:
                 continue
             if all_day:
@@ -498,13 +703,12 @@ def _ics_payloads_from_record(record):
     content = record.get("content", "") or ""
     raw_source = record.get("raw_source", "") or ""
 
-    if any(marker in content.casefold() for marker in ICS_MARKERS):
+    if _has_ics_component(content):
         detected = True
         payloads.append(content)
 
     if raw_source:
-        raw_lower = raw_source.casefold()
-        if any(marker in raw_lower for marker in ICS_MARKERS):
+        if _has_ics_component(raw_source):
             detected = True
             payloads.append(raw_source)
         try:
@@ -514,18 +718,25 @@ def _ics_payloads_from_record(record):
                 filename = (part.get_filename() or "").casefold()
                 if content_type != "text/calendar" and not filename.endswith(".ics"):
                     continue
-                detected = True
                 payload = part.get_payload(decode=True)
                 if isinstance(payload, bytes):
                     charset = part.get_content_charset() or "utf-8"
                     payload = payload.decode(charset, errors="replace")
                 elif payload is None:
                     payload = part.get_payload()
-                if isinstance(payload, str):
+                if isinstance(payload, str) and _has_ics_component(payload):
+                    detected = True
                     payloads.append(payload)
         except (TypeError, ValueError):
             pass
     return detected, payloads
+
+
+def _has_ics_component(text):
+    return any(
+        line.strip().upper() in {"BEGIN:VCALENDAR", "BEGIN:VEVENT"}
+        for line in _unfold_ics_lines(text)
+    )
 
 
 def parse_ics_event_definitions(record):
@@ -541,11 +752,19 @@ def parse_ics_event_definitions(record):
 
     definitions = []
     for payload in payloads:
+        timezone_definitions = _ics_timezone_definitions(payload)
         _, blocks = _ics_event_blocks(payload)
         for calendar_method, block in blocks:
             properties = _parse_ics_properties(block)
-            meeting = _parse_ics_event(block, record, calendar_method, properties)
+            meeting = _parse_ics_event(
+                block,
+                record,
+                calendar_method,
+                properties,
+                timezone_definitions,
+            )
             if meeting is not None:
+                properties[TIMEZONE_DEFINITIONS_PROPERTY] = timezone_definitions
                 definitions.append((meeting, properties))
     return definitions
 

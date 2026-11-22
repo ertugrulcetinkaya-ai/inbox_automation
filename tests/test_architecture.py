@@ -21,6 +21,12 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIs(main.Meeting, Meeting)
         self.assertIs(main.extract_meetings, extract_meetings)
 
+    def test_main_environment_file_compatibility_alias_is_lazy(self):
+        from unittest.mock import patch
+
+        with patch.dict("os.environ", {"TELEGRAM_ENV_FILE": "/tmp/synthetic-telegram.env"}):
+            self.assertEqual(str(main.ENV_FILE), "/tmp/synthetic-telegram.env")
+
     def test_shared_configuration_has_no_duplicate_keywords(self):
         from mail_digest.config import MEETING_KEYWORDS
 
@@ -46,17 +52,18 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_digest_logs_message_count_without_mailbox_identity(self):
         from mail_digest.cli import _run_digest
-        from mail_digest.config import TARGET_EMAIL
 
         output = StringIO()
-        with patch("mail_digest.cli.fetch_mail", return_value=[]), patch(
+        with patch.dict("os.environ", {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}), patch(
+            "mail_digest.cli.fetch_mail", return_value=[]
+        ), patch(
             "mail_digest.cli.selected_source_name", return_value="synthetic"
         ), patch("mail_digest.cli.local_now", return_value=datetime(2026, 11, 21, 9)), redirect_stdout(
             output
         ):
             self.assertEqual(_run_digest(dry_run=True), 0)
 
-        self.assertNotIn(TARGET_EMAIL, output.getvalue())
+        self.assertNotIn("user@example.com", output.getvalue())
 
     def _applescript_source(self):
         script_path = Path(main.__file__).parent / "mail_fetcher.applescript"
@@ -66,6 +73,8 @@ class ArchitectureTests(unittest.TestCase):
     def test_applescript_reads_body_for_every_message_without_subject_gate(self):
         _, script = self._applescript_source()
 
+        self.assertIn("on run argv", script)
+        self.assertIn("item 1 of argv", script)
         # Every message in the 30-day window gets a body-read attempt.
         self.assertIn("content of themsg", script)
 
@@ -130,8 +139,6 @@ class ArchitectureTests(unittest.TestCase):
             self.assertNotIn(user_home_prefix, template)
 
     def test_sources_and_fixtures_use_only_synthetic_email_domains(self):
-        from mail_digest.config import TARGET_EMAIL
-
         project_root = Path(main.__file__).parent
         email_pattern = re.compile(
             r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
@@ -143,28 +150,42 @@ class ArchitectureTests(unittest.TestCase):
             "example.net",
             "invalid",
         }
-        # TODO(F0.2): remove this temporary exact-address exception when the
-        # target account is read from configuration instead of source code.
-        temporary_target_email = TARGET_EMAIL.casefold()
         user_home_prefix = "/" + "Users" + "/"
 
-        for directory in ("tests", "mail_digest"):
-            for path in (project_root / directory).rglob("*"):
-                if not path.is_file():
-                    continue
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except (OSError, UnicodeError):
-                    continue
+        paths = []
+        for directory in ("tests", "mail_digest", "scripts", "launchd"):
+            paths.extend((project_root / directory).rglob("*"))
+        paths.extend(
+            project_root / filename
+            for filename in ("README.md", "mail_fetcher.applescript")
+        )
+        for path in paths:
+            if not path.is_file():
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
 
-                self.assertNotIn(user_home_prefix, content, path.name)
-                for email in email_pattern.findall(content):
-                    domain = email.rsplit("@", 1)[-1].casefold()
-                    self.assertTrue(
-                        domain in allowed_domains
-                        or email.casefold() == temporary_target_email,
-                        f"Unexpected non-synthetic email domain in {path.name}",
-                    )
+            self.assertNotIn(user_home_prefix, content, path.name)
+            for email in email_pattern.findall(content):
+                domain = email.rsplit("@", 1)[-1].casefold()
+                self.assertTrue(
+                    domain in allowed_domains,
+                    f"Unexpected non-synthetic email domain in {path.name}",
+                )
+
+    def test_target_account_is_resolved_from_configuration(self):
+        from mail_digest.config import target_email
+
+        with patch.dict("os.environ", {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}):
+            self.assertEqual(target_email(), "user@example.com")
+
+        config_source = (Path(main.__file__).parent / "mail_digest" / "config.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('os.environ["MAIL_DIGEST_TARGET_EMAIL"]', config_source)
+        self.assertNotIn('TARGET_EMAIL = "', config_source)
 
     def test_all_launchd_templates_enable_unbuffered_python_output(self):
         project_root = Path(main.__file__).parent
@@ -181,9 +202,15 @@ class ArchitectureTests(unittest.TestCase):
     def test_install_launchd_renders_scheduled_daily_argument(self):
         from scripts.install_launchd import TEMPLATES, render_template
 
-        rendered = plistlib.loads(render_template(TEMPLATES["summary"]))
+        rendered = plistlib.loads(
+            render_template(TEMPLATES["summary"], target_account="user@example.com")
+        )
 
         self.assertIn("--scheduled", rendered["ProgramArguments"])
+        self.assertEqual(
+            rendered["EnvironmentVariables"]["MAIL_DIGEST_TARGET_EMAIL"],
+            "user@example.com",
+        )
 
     def test_listener_print_calls_flush_stdout(self):
         project_root = Path(main.__file__).parent

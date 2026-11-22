@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import socket
-import tempfile
 from pathlib import Path
 
 from google.auth.exceptions import RefreshError, TransportError
@@ -15,54 +13,16 @@ from googleapiclient.discovery import build
 import httplib2
 
 from ...config import GMAIL_HTTP_TIMEOUT_SECONDS, GMAIL_SCOPES, gmail_token_file
+from ...fileio import atomic_write_private
 
 
 class GmailAuthError(RuntimeError):
     """Credentials are unavailable or cannot be refreshed unattended."""
 
 
-def _ensure_private_parent(path: Path) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    try:
-        path.parent.chmod(0o700)
-    except OSError:
-        pass
-
-
 def write_private_text(path: Path, text: str) -> None:
     """Atomically replace a secret file without a world-readable window."""
-    _ensure_private_parent(path)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=str(path.parent)
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, 0o600)
-        handle = os.fdopen(descriptor, "w", encoding="utf-8")
-        descriptor = -1
-        with handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-        directory_descriptor = os.open(
-            str(path.parent),
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-        )
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-    except Exception:
-        if descriptor >= 0:
-            os.close(descriptor)
-        try:
-            temporary_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        raise
+    atomic_write_private(path, text)
 
 
 def load_credentials(token_path: Path | None = None) -> Credentials:

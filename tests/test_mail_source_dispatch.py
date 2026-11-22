@@ -1,5 +1,9 @@
 import os
+import sys
+import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -63,20 +67,62 @@ class GmailReadOnlyArchitectureTests(unittest.TestCase):
     def test_launchd_renderer_defaults_to_gmail_and_supports_gmail_paths(self):
         from scripts.install_launchd import TEMPLATES, render_template
 
-        rendered = render_template(TEMPLATES["summary"]).decode()
+        rendered = render_template(
+            TEMPLATES["summary"], target_account="user@example.com"
+        ).decode()
         self.assertIn("<string>gmail</string>", rendered)
         self.assertIn("GMAIL_CREDENTIALS_FILE", rendered)
         self.assertNotIn("__GMAIL_", rendered)
+        self.assertIn("<string>user@example.com</string>", rendered)
 
         apple_rendered = render_template(
-            TEMPLATES["summary"], mail_source="apple_mail"
+            TEMPLATES["summary"],
+            mail_source="apple_mail",
+            target_account="user@example.com",
         ).decode()
         self.assertIn("<string>apple_mail</string>", apple_rendered)
 
-        reminder = render_template(TEMPLATES["reminder"], reminder_minutes=30).decode()
+        reminder = render_template(
+            TEMPLATES["reminder"],
+            reminder_minutes=30,
+            target_account="user@example.com",
+        ).decode()
         self.assertIn("<string>--reminder</string>", reminder)
         self.assertIn("<string>30</string>", reminder)
         self.assertIn("<integer>300</integer>", reminder)
+
+    def test_all_launchd_templates_receive_target_account(self):
+        import plistlib
+
+        from scripts.install_launchd import TEMPLATES, render_template
+
+        for template_name, template_path in TEMPLATES.items():
+            with self.subTest(template=template_name):
+                rendered = plistlib.loads(
+                    render_template(
+                        template_path, target_account="user@example.com"
+                    )
+                )
+                self.assertEqual(
+                    rendered["EnvironmentVariables"]["MAIL_DIGEST_TARGET_EMAIL"],
+                    "user@example.com",
+                )
+
+    def test_installer_reports_missing_target_without_printing_an_address(self):
+        from scripts.install_launchd import main as install_main
+
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"MAIL_DIGEST_TARGET_ENV_FILE": str(Path(directory) / "missing.env")},
+            clear=True,
+        ), patch.object(sys, "argv", ["install_launchd.py"]), redirect_stderr(output):
+            with self.assertRaises(SystemExit) as raised:
+                install_main()
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("MAIL_DIGEST_TARGET_EMAIL ayarlayın", output.getvalue())
+        self.assertNotIn("@", output.getvalue())
 
 
 if __name__ == "__main__":

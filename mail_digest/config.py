@@ -2,25 +2,18 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import stat
-import math
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = Path(
-    os.environ.get(
-        "TELEGRAM_ENV_FILE",
-        str(Path.home() / ".hermes_local_automation/telegram.env"),
-    )
-).expanduser()
 SCRIPT_PATH = PROJECT_ROOT / "mail_fetcher.applescript"
 FIELD_DELIMITER = "__MAIL_DIGEST_FIELD__"
 TRANSPORT_NEWLINE_TOKEN = "__MAIL_DIGEST_LINEBREAK__"
-TARGET_EMAIL = "ertugrul@cetinkayalar.com"
 LOCAL_TIMEZONE_NAME = "Europe/Istanbul"
 YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS = 60
 # Apple Mail can take several seconds per body when it has to hydrate a
@@ -34,18 +27,10 @@ MAX_BODY_BYTES = 256 * 1024
 MAX_RAW_MIME_BYTES = 1024 * 1024
 MAX_ICS_BYTES = 256 * 1024
 GMAIL_HTTP_TIMEOUT_SECONDS = 30
-DIGEST_LOCK_FILE = Path(
-    os.environ.get("MAIL_DIGEST_LOCK_FILE", "/tmp/mail_unread_digest.lock")
-).expanduser()
-REMINDER_STATE_FILE = Path(
-    os.environ.get(
-        "MEETING_REMINDER_STATE_FILE",
-        str(Path.home() / ".hermes_local_automation" / "mail_digest" / "reminders.json"),
-    )
-).expanduser()
 REMINDER_MINUTES_DEFAULT = 15
 REMINDER_WINDOW_MINUTES_DEFAULT = 5
 DAILY_LOCK_WAIT_SECONDS_DEFAULT = 300.0
+PREFLIGHT_LOCK_WAIT_SECONDS_DEFAULT = 120.0
 ATTENTION_CONFIDENCE_THRESHOLD = 0.80
 MAIL_SOURCE_DEFAULT = "gmail"
 GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
@@ -54,6 +39,10 @@ GMAIL_DATA_DIR = Path.home() / ".hermes_local_automation" / "gmail"
 
 class SecretFilePermissionError(PermissionError):
     """A credentials file is readable by another local user."""
+
+
+class TargetEmailConfigurationError(ValueError):
+    """The target Gmail account is missing or invalid."""
 
 
 def gmail_credentials_file():
@@ -72,6 +61,87 @@ def gmail_cache_file():
     return Path(
         os.environ.get("GMAIL_CACHE_FILE", str(GMAIL_DATA_DIR / "cache.sqlite3"))
     ).expanduser()
+
+
+def telegram_env_file():
+    return Path(
+        os.environ.get(
+            "TELEGRAM_ENV_FILE",
+            str(Path.home() / ".hermes_local_automation" / "telegram.env"),
+        )
+    ).expanduser()
+
+
+def digest_lock_file():
+    return Path(
+        os.environ.get("MAIL_DIGEST_LOCK_FILE", "/tmp/mail_unread_digest.lock")
+    ).expanduser()
+
+
+def reminder_state_file():
+    return Path(
+        os.environ.get(
+            "MEETING_REMINDER_STATE_FILE",
+            str(Path.home() / ".hermes_local_automation" / "mail_digest" / "reminders.json"),
+        )
+    ).expanduser()
+
+
+def target_env_file():
+    configured = os.environ.get("MAIL_DIGEST_TARGET_ENV_FILE")
+    return Path(
+        configured
+        or Path.home() / ".hermes_local_automation" / "mail_digest" / "target.env"
+    ).expanduser()
+
+
+def _validated_target_email(value):
+    email = value.strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL must contain a valid email address"
+        )
+    return email
+
+
+def target_email():
+    """Resolve the target account from the environment or its private env file."""
+
+    if "MAIL_DIGEST_TARGET_EMAIL" in os.environ:
+        return _validated_target_email(os.environ["MAIL_DIGEST_TARGET_EMAIL"])
+
+    env_path = target_env_file()
+    try:
+        mode = stat.S_IMODE(env_path.stat().st_mode)
+    except FileNotFoundError as exc:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL is not configured; target env file is missing"
+        ) from exc
+    except OSError as exc:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL target env file cannot be inspected"
+        ) from exc
+    if mode != 0o600:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL target env file must have 0600 permissions"
+        )
+
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL target env file cannot be read"
+        ) from exc
+    if len(lines) != 1:
+        raise TargetEmailConfigurationError(
+            "target env file must contain exactly one MAIL_DIGEST_TARGET_EMAIL line"
+        )
+    key, separator, value = lines[0].partition("=")
+    if key != "MAIL_DIGEST_TARGET_EMAIL" or not separator:
+        raise TargetEmailConfigurationError(
+            "target env file must contain exactly one MAIL_DIGEST_TARGET_EMAIL line"
+        )
+    return _validated_target_email(value)
 
 TURKISH_MONTHS = {
     "ocak": 1,
@@ -162,7 +232,7 @@ def local_now():
 def load_env(env_file=None):
     """Load the Telegram environment file without exposing its contents."""
 
-    env_path = Path(env_file or ENV_FILE).expanduser()
+    env_path = Path(env_file or telegram_env_file()).expanduser()
     env = {}
     if not env_path.is_file():
         raise FileNotFoundError(f"Env file not found at {env_path}")
@@ -244,7 +314,19 @@ def daily_lock_wait_seconds():
     )
 
 
-GMAIL_BATCH_SIZE = _bounded_int_env("GMAIL_BATCH_SIZE", 10, 1, 50)
-GMAIL_BATCH_PAUSE_SECONDS = _nonnegative_float_env(
-    "GMAIL_BATCH_PAUSE_SECONDS", 1.0
-)
+def preflight_lock_wait_seconds():
+    value = _nonnegative_float_env(
+        "MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS",
+        PREFLIGHT_LOCK_WAIT_SECONDS_DEFAULT,
+    )
+    if value > 120:
+        raise ValueError("MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS must be at most 120")
+    return value
+
+
+def gmail_batch_size():
+    return _bounded_int_env("GMAIL_BATCH_SIZE", 10, 1, 50)
+
+
+def gmail_batch_pause_seconds():
+    return _nonnegative_float_env("GMAIL_BATCH_PAUSE_SECONDS", 1.0)

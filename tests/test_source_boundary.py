@@ -21,6 +21,7 @@ splits stdout into physical lines first.
 """
 
 import subprocess
+import os
 import unittest
 from datetime import date
 from unittest.mock import patch
@@ -35,6 +36,13 @@ DATE_AUG14 = "Friday, August 14, 2026 at 09:00:00"
 
 
 class SourceBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.target_environment = patch.dict(
+            os.environ, {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}
+        )
+        self.target_environment.start()
+        self.addCleanup(self.target_environment.stop)
+
     def _completed(self, stdout=""):
         return subprocess.CompletedProcess(
             args=["osascript"], returncode=0, stdout=stdout, stderr=""
