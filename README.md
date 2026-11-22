@@ -1,6 +1,6 @@
 # Inbox Automation
 
-`inbox_automation`, `ertugrul@cetinkayalar.com` hesabının üretim Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Yalnızca birincil gelen kutusu (`INBOX`/`Inbox`) taranır. Gmail varsayılan kaynaktır; Apple Mail yalnızca `MAIL_SOURCE=apple_mail` açıkça verildiğinde rollback kaynağı olarak kullanılır.
+`inbox_automation`, `MAIL_DIGEST_TARGET_EMAIL` ile yapılandırılan Gmail gelen kutusunu resmi ve salt-okunur Gmail API üzerinden okuyup toplantı bilgilerini Telegram üzerinden özetleyen, makineden bağımsız bir otomasyondur. Yalnızca birincil gelen kutusu (`INBOX`/`Inbox`) taranır. Gmail varsayılan kaynaktır; Apple Mail yalnızca `MAIL_SOURCE=apple_mail` açıkça verildiğinde rollback kaynağı olarak kullanılır.
 
 Proje yalnızca hedef hesabın birincil gelen kutusunu inceler. Gmail'de normal mesajlar 30 gün, takvim payload'ı (`raw_source`) bulunan mesajlar 366 gün saklanır; Apple Mail rollback yolu 30 günle sınırlıdır. Okundu/okunmadı durumu önemli değildir; hiçbir mesaj değiştirilmez.
 
@@ -184,6 +184,8 @@ Uygulama ayarları aşağıdaki ortam değişkenlerinden veya Telegram kimlik bi
 | Değişken | Kullanım ve varsayılan |
 |---|---|
 | `MAIL_SOURCE` | Mail kaynağı; varsayılan `gmail`, Apple Mail için açıkça `apple_mail`. |
+| `MAIL_DIGEST_TARGET_EMAIL` | Tek hedef Gmail/Apple Mail hesabı; önce ortam değişkeni, yoksa `~/.hermes_local_automation/mail_digest/target.env` dosyası kullanılır. Sentetik biçim örneği: `user@example.com`. |
+| `MAIL_DIGEST_TARGET_ENV_FILE` | Hedef hesabın private env dosyasının yolu; varsayılan `~/.hermes_local_automation/mail_digest/target.env`. |
 | `MAIL_DIGEST_LOCK_FILE` | Ortak digest kilidi; varsayılan `/tmp/mail_unread_digest.lock`. |
 | `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` | Planlı 08:00 özetinin ortak kilidi bekleme süresi; varsayılan `300` saniye. |
 | `MAIL_DIGEST_PARSE_CACHE_FILE` | Parse cache SQLite yolu; varsayılan `~/.hermes_local_automation/mail_digest/parse_cache.sqlite3`. |
@@ -207,9 +209,13 @@ Batch, bekleme, kilit ve state dosyası ayarları ilgili işlem başladığında
 
 Telegram token'ını veya gerçek sohbet/kullanıcı kimliklerini kaynak koda, loglara ya da fixture'lara yazmayın.
 
+### Yükseltme notu
+
+Mac Mini'ye deploy etmeden önce `~/.hermes_local_automation/mail_digest/target.env` dosyasını oluşturun. Dosyada yalnızca `MAIL_DIGEST_TARGET_EMAIL=user@example.com` biçiminde tek satır bulunmalı ve izinleri `0600` olmalıdır. Örnekteki sentetik adresi kendi hedef Gmail adresinizle değiştirin; `MAIL_DIGEST_TARGET_EMAIL` ortam değişkeni varsa dosyaya göre önceliklidir. İsterseniz dosya yolunu `MAIL_DIGEST_TARGET_ENV_FILE` ile belirleyebilirsiniz.
+
 ## Gmail API kurulumu ve production kullanımı
 
-Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth kapsamını ister. Kod mesajları değiştirmez, etiketlemez, okundu durumunu değiştirmez, taşımaz, silmez veya göndermez. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest de başarısız olur.
+Gmail kaynağı yalnızca `https://www.googleapis.com/auth/gmail.readonly` OAuth kapsamını ister. Her full ve incremental sync `getProfile` yanıtındaki `emailAddress` alanını yapılandırılmış hedefle büyük/küçük harf duyarsız karşılaştırır; eşleşmiyorsa cache veya checkpoint değiştirilmeden işlem reddedilir ve hesap adresleri loglanmaz. Kod mesajları değiştirmez, etiketlemez, okundu durumunu değiştirmez, taşımaz, silmez veya göndermez. Gmail hatasında Apple Mail'e otomatik fallback yoktur; seçilen kaynak başarısızsa digest de başarısız olur.
 
 1. Google Cloud projesinde Gmail API'yi etkinleştirin ve Desktop application OAuth istemcisi oluşturun. OAuth doğrulamasının tamamlandığı varsayılmaz; bu operatör adımıdır.
 2. İndirilen istemci dosyasını `~/.hermes_local_automation/gmail/credentials.json` konumuna koyun ve `chmod 600` uygulayın.

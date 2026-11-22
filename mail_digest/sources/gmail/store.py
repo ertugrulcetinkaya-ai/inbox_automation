@@ -16,8 +16,9 @@ RETENTION_VERSION = 2
 
 
 class GmailStore:
-    def __init__(self, path):
+    def __init__(self, path, account):
         self.path = Path(path).expanduser()
+        self.account = account
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             self.path.parent.chmod(0o700)
@@ -208,7 +209,7 @@ class GmailStore:
         ).fetchall()
         return [
             {
-                "account": "ertugrul@cetinkayalar.com",
+                "account": self.account,
                 "mailbox": "INBOX",
                 "thread_id": row["thread_id"],
                 "sender": row["sender"],

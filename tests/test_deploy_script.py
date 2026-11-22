@@ -22,6 +22,7 @@ class DeployScriptTests(unittest.TestCase):
         apply=False,
         preflight_ok=True,
         preflight_output="",
+        target_config_ok=True,
         bootstrap_failure_count=0,
         bootstrap_fail_label="",
         wait_label="",
@@ -113,6 +114,7 @@ fi
             "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_PYTHON_LOG\"\n"
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == import && \"$*\" == '-c import sys' ]]; then exit 1; fi\n"
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == pip && \"$*\" == '-m pip --version' ]]; then exit 1; fi\n"
+            "if [[ \"$DEPLOY_TEST_TARGET_CONFIG_OK\" == false && \"$*\" == '-c from mail_digest.config import target_email; target_email()' ]]; then exit 1; fi\n"
             "if [[ \"$*\" == 'main.py --upcoming --dry-run' ]]; then\n"
             "  printf '%s\\n' \"${MAIL_DIGEST_LOCK_FILE:-}\" > \"$DEPLOY_TEST_PYTHON_LOG.preflight_lock\"\n"
             "  printf '%s\\n' \"$DEPLOY_TEST_PREFLIGHT_OUTPUT\"\n"
@@ -150,6 +152,7 @@ fi
                 "DEPLOY_TEST_LAUNCHD": launchd_output,
                 "DEPLOY_TEST_PREFLIGHT_EXIT": "0" if preflight_ok else "1",
                 "DEPLOY_TEST_PREFLIGHT_OUTPUT": preflight_output,
+                "DEPLOY_TEST_TARGET_CONFIG_OK": "true" if target_config_ok else "false",
                 "DEPLOY_TEST_BOOTSTRAP_FAILURE_COUNT": str(bootstrap_failure_count),
                 "DEPLOY_TEST_BOOTSTRAP_FAIL_LABEL": bootstrap_fail_label,
                 "DEPLOY_TEST_BOOTSTRAP_ERROR": "Bootstrap failed: 5: Input/output error",
@@ -281,6 +284,19 @@ fi
         )
         calls = python_log.read_text(encoding="utf-8").splitlines()
         self.assertIn("main.py --upcoming --dry-run", calls)
+        self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))
+        self.assertFalse(launchctl_log.exists())
+
+    def test_missing_target_configuration_stops_before_gmail_preflight(self):
+        result, launchctl_log, python_log = self.run_deploy(target_config_ok=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "~/.hermes_local_automation/mail_digest/target.env eksik",
+            result.stderr,
+        )
+        calls = python_log.read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("main.py --upcoming --dry-run", calls)
         self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))
         self.assertFalse(launchctl_log.exists())
 

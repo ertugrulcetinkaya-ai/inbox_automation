@@ -14,7 +14,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "mail_fetcher.applescript"
 FIELD_DELIMITER = "__MAIL_DIGEST_FIELD__"
 TRANSPORT_NEWLINE_TOKEN = "__MAIL_DIGEST_LINEBREAK__"
-TARGET_EMAIL = "ertugrul@cetinkayalar.com"
 LOCAL_TIMEZONE_NAME = "Europe/Istanbul"
 YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS = 60
 # Apple Mail can take several seconds per body when it has to hydrate a
@@ -39,6 +38,10 @@ GMAIL_DATA_DIR = Path.home() / ".hermes_local_automation" / "gmail"
 
 class SecretFilePermissionError(PermissionError):
     """A credentials file is readable by another local user."""
+
+
+class TargetEmailConfigurationError(ValueError):
+    """The target Gmail account is missing or invalid."""
 
 
 def gmail_credentials_file():
@@ -81,6 +84,63 @@ def reminder_state_file():
             str(Path.home() / ".hermes_local_automation" / "mail_digest" / "reminders.json"),
         )
     ).expanduser()
+
+
+def target_env_file():
+    configured = os.environ.get("MAIL_DIGEST_TARGET_ENV_FILE")
+    return Path(
+        configured
+        or Path.home() / ".hermes_local_automation" / "mail_digest" / "target.env"
+    ).expanduser()
+
+
+def _validated_target_email(value):
+    email = value.strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL must contain a valid email address"
+        )
+    return email
+
+
+def target_email():
+    """Resolve the target account from the environment or its private env file."""
+
+    if "MAIL_DIGEST_TARGET_EMAIL" in os.environ:
+        return _validated_target_email(os.environ["MAIL_DIGEST_TARGET_EMAIL"])
+
+    env_path = target_env_file()
+    try:
+        mode = stat.S_IMODE(env_path.stat().st_mode)
+    except FileNotFoundError as exc:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL is not configured; target env file is missing"
+        ) from exc
+    except OSError as exc:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL target env file cannot be inspected"
+        ) from exc
+    if mode != 0o600:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL target env file must have 0600 permissions"
+        )
+
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise TargetEmailConfigurationError(
+            "MAIL_DIGEST_TARGET_EMAIL target env file cannot be read"
+        ) from exc
+    if len(lines) != 1:
+        raise TargetEmailConfigurationError(
+            "target env file must contain exactly one MAIL_DIGEST_TARGET_EMAIL line"
+        )
+    key, separator, value = lines[0].partition("=")
+    if key != "MAIL_DIGEST_TARGET_EMAIL" or not separator:
+        raise TargetEmailConfigurationError(
+            "target env file must contain exactly one MAIL_DIGEST_TARGET_EMAIL line"
+        )
+    return _validated_target_email(value)
 
 TURKISH_MONTHS = {
     "ocak": 1,

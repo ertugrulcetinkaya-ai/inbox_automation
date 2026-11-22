@@ -88,6 +88,12 @@ else
     "$VENV_PYTHON" -m compileall -q main.py telegram_listener.py mail_digest tests scripts
 fi
 
+if ! "$VENV_PYTHON" -c 'from mail_digest.config import target_email; target_email()' \
+    >/dev/null 2>&1; then
+    printf '~/.hermes_local_automation/mail_digest/target.env eksik\n' >&2
+    exit 1
+fi
+
 PREFLIGHT_LOCK="$(mktemp "${TMPDIR:-/tmp}/inbox_preflight_lock.XXXXXX")"
 PREFLIGHT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/inbox_preflight_output.XXXXXX")"
 trap 'rm -f "$PREFLIGHT_LOCK" "$PREFLIGHT_OUTPUT"' EXIT

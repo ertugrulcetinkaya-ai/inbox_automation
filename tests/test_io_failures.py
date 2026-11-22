@@ -1,3 +1,4 @@
+import os
 import subprocess
 import signal
 import io
@@ -57,6 +58,13 @@ class EnvironmentLoaderTests(unittest.TestCase):
 
 
 class AppleMailSourceFailureTests(unittest.TestCase):
+    def setUp(self):
+        self.target_environment = patch.dict(
+            os.environ, {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}
+        )
+        self.target_environment.start()
+        self.addCleanup(self.target_environment.stop)
+
     def completed(self, stdout="", stderr="", returncode=0):
         return subprocess.CompletedProcess(
             args=["osascript"],
@@ -104,6 +112,7 @@ class AppleMailSourceFailureTests(unittest.TestCase):
 
         self.assertIsNone(_run_applescript())
         popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0][-1], "user@example.com")
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
         killpg.assert_called_once_with(process.pid, signal.SIGKILL)
 

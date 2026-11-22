@@ -32,9 +32,9 @@ def synthetic_records(count: int, tokens_per_message: int, event_start):
     return [
         {
             "subject": f"Synthetic meeting {index:03d}",
-            "sender": "Fixture Organizer <organizer@example.test>",
+            "sender": "Fixture Organizer <organizer@example.com>",
             "received_date": event_start.date().isoformat(),
-            "source_message_id": f"synthetic-{index:03d}@example.test",
+            "source_message_id": f"synthetic-{index:03d}@example.com",
             "content": content,
         }
         for index in range(count)

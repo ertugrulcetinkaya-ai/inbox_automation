@@ -4,12 +4,18 @@ import os
 import signal
 import subprocess
 
-from ..config import APPLE_SCRIPT_TIMEOUT_SECONDS, FIELD_DELIMITER, SCRIPT_PATH, log
+from ..config import (
+    APPLE_SCRIPT_TIMEOUT_SECONDS,
+    FIELD_DELIMITER,
+    SCRIPT_PATH,
+    log,
+    target_email,
+)
 from ..parsing.dates import parse_received_date
 from ..utils import sanitize, sanitize_content, sanitize_transport_field
 
 
-def _run_applescript():
+def _run_applescript(target_address=None):
     """Run AppleScript with a killable process group.
 
     ``subprocess.run(timeout=...)`` only terminates the direct ``osascript``
@@ -19,7 +25,7 @@ def _run_applescript():
     """
 
     process = subprocess.Popen(
-        ["osascript", str(SCRIPT_PATH)],
+        ["osascript", str(SCRIPT_PATH), target_address or target_email()],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -51,7 +57,7 @@ def _run_applescript():
 def fetch_mail():
     """Fetch candidate messages from Apple Mail without changing message state."""
     try:
-        result = _run_applescript()
+        result = _run_applescript(target_email())
         if result is None:
             return None
 
