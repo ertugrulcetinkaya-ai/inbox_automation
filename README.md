@@ -188,6 +188,7 @@ Uygulama ayarları aşağıdaki ortam değişkenlerinden veya Telegram kimlik bi
 | `MAIL_DIGEST_TARGET_ENV_FILE` | Hedef hesabın private env dosyasının yolu; varsayılan `~/.hermes_local_automation/mail_digest/target.env`. |
 | `MAIL_DIGEST_LOCK_FILE` | Ortak digest kilidi; varsayılan `/tmp/mail_unread_digest.lock`. |
 | `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` | Planlı 08:00 özetinin ortak kilidi bekleme süresi; varsayılan `300` saniye. |
+| `MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS` | Deploy Gmail ön kontrolünün ortak üretim kilidini bekleme süresi; varsayılan ve üst sınır `120` saniye. |
 | `MAIL_DIGEST_PARSE_CACHE_FILE` | Parse cache SQLite yolu; varsayılan `~/.hermes_local_automation/mail_digest/parse_cache.sqlite3`. |
 | `MAIL_DIGEST_STATUS_FILE` | Çalışma durumu JSON yolu; varsayılan `~/.hermes_local_automation/mail_digest/status.json`. |
 | `GMAIL_CREDENTIALS_FILE` | Gmail OAuth client dosyası; varsayılan `~/.hermes_local_automation/gmail/credentials.json`. |
@@ -280,7 +281,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Beş dakikalık hatırlatma görevi de aynı `run_digest()` ve `flock` akışını kullanır; günlük özet veya Telegram komutuyla çakışırsa güvenli biçimde o turu atlar.
 - Hatırlatma taraması `(son başarılı tarama, şimdi + lead time]` aralığını yakalar; ilk taramada küçük bir kurtarma örtüşmesi kullanılır. State cursor'ı yalnızca tarama ve gönderim başarılı olunca ilerler.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
-- Mac Mini için bu depodaki `scripts/deploy_mac_mini.sh` kullanılır. Varsayılanı kontrol ve önizleme yapar; summary, reminder ve listener plist'lerini yazma ile launchd `bootout`/`bootstrap` işlemleri yalnızca `--apply` verildiğinde yapılır. `--apply` bu kod değişikliği sırasında çalıştırılmaz.
+- Mac Mini için bu depodaki `scripts/deploy_mac_mini.sh` kullanılır. Varsayılan mod sırasıyla `git pull --ff-only`, `.venv/bin/python -m pip install -r requirements.lock`, kalite kontrolleri ve Gmail ön kontrolünü çalıştırır; ardından plist'leri önizler. Gmail ön kontrolü ortak üretim kilidini varsayılan olarak en fazla 120 saniye bekler; kilidi alamazsa `75` koduyla çıkar ve üretim işi çalıştığını bildirir. Plist yazma ve launchd `bootout`/`bootstrap` işlemleri yalnızca `--apply` verildiğinde yapılır.
 - `--apply`, her launchd label'ı için `bootout` sonrasında `launchctl print` başarısız olana dek en çok 30 saniye bekler; ardından `bootstrap` işlemini üç kez dener ve başarısız denemelerin hata metnini yazar. `DEPLOY_WAIT_STEP_SECONDS` bekleme adımını saniye cinsinden ayarlar (varsayılan `1`); bootstrap denemeleri arasındaki bekleme bunun üç katıdır. Sentetik deploy testlerinde `DEPLOY_WAIT_STEP_SECONDS=0` beklemeleri atlar.
 - Deploy ön kontrolü `.venv/bin/python` ve `python -m pip` işleyişini doğrular; bozuk venv için elle yeniden oluşturma komutunu bildirir ve venv'i otomatik değiştirmez. `ruff` ve `pyright`, yalnızca kendi `--version` kontrolleri başarılıysa kullanılır.
 - Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz.

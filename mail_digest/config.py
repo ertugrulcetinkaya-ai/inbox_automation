@@ -30,6 +30,7 @@ GMAIL_HTTP_TIMEOUT_SECONDS = 30
 REMINDER_MINUTES_DEFAULT = 15
 REMINDER_WINDOW_MINUTES_DEFAULT = 5
 DAILY_LOCK_WAIT_SECONDS_DEFAULT = 300.0
+PREFLIGHT_LOCK_WAIT_SECONDS_DEFAULT = 120.0
 ATTENTION_CONFIDENCE_THRESHOLD = 0.80
 MAIL_SOURCE_DEFAULT = "gmail"
 GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
@@ -311,6 +312,16 @@ def daily_lock_wait_seconds():
         "MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS",
         DAILY_LOCK_WAIT_SECONDS_DEFAULT,
     )
+
+
+def preflight_lock_wait_seconds():
+    value = _nonnegative_float_env(
+        "MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS",
+        PREFLIGHT_LOCK_WAIT_SECONDS_DEFAULT,
+    )
+    if value > 120:
+        raise ValueError("MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS must be at most 120")
+    return value
 
 
 def gmail_batch_size():

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mail_digest.cli import main, run_digest
+from mail_digest.config import preflight_lock_wait_seconds
 from mail_digest.services.lock import DigestAlreadyRunning, digest_lock
 
 
@@ -185,6 +186,39 @@ except DigestAlreadyRunning:
         with patch.object(sys, "argv", ["main.py"]):
             self.assertEqual(main(), 0)
 
+    @patch("mail_digest.cli.preflight_lock_wait_seconds", return_value=12.0)
+    @patch("mail_digest.cli.run_digest", return_value=0)
+    def test_upcoming_dry_run_preflight_waits_for_the_production_lock(self, run, _wait):
+        with patch.object(sys, "argv", ["main.py", "--upcoming", "--dry-run"]):
+            self.assertEqual(main(), 0)
+
+        run.assert_called_once_with(
+            upcoming=True,
+            dry_run=True,
+            wait_seconds=12.0,
+            scheduled=False,
+        )
+
+    @patch("mail_digest.cli.preflight_lock_wait_seconds", return_value=120.0)
+    @patch("mail_digest.cli.run_digest", side_effect=DigestAlreadyRunning)
+    def test_upcoming_dry_run_preflight_returns_75_when_lock_stays_busy(self, run, _wait):
+        with patch.object(sys, "argv", ["main.py", "--upcoming", "--dry-run"]):
+            self.assertEqual(main(), 75)
+
+        run.assert_called_once_with(
+            upcoming=True,
+            dry_run=True,
+            wait_seconds=120.0,
+            scheduled=False,
+        )
+
+    def test_preflight_lock_wait_is_bounded_at_120_seconds(self):
+        with patch.dict(os.environ, {"MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS": "120"}):
+            self.assertEqual(preflight_lock_wait_seconds(), 120.0)
+        with patch.dict(os.environ, {"MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS": "120.1"}):
+            with self.assertRaisesRegex(ValueError, "at most 120"):
+                preflight_lock_wait_seconds()
+
     @patch("mail_digest.cli.run_digest", return_value=0)
     def test_cli_routes_week_attention_and_reminder_modes(self, run):
         for flag, mode in (
@@ -210,6 +244,7 @@ except DigestAlreadyRunning:
         run.assert_called_once_with(
             upcoming=False,
             dry_run=False,
+            wait_seconds=0,
             scheduled=True,
         )
 

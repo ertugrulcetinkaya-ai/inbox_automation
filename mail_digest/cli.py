@@ -7,6 +7,7 @@ from .config import (
     daily_lock_wait_seconds,
     local_now,
     log,
+    preflight_lock_wait_seconds,
     reminder_minutes,
     reminder_window_minutes,
 )
@@ -136,7 +137,13 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
     return 0
 
 
-def run_digest(upcoming=False, dry_run=False, mode=None, wait_seconds=0, scheduled=False):
+def run_digest(
+    upcoming=False,
+    dry_run=False,
+    mode=None,
+    wait_seconds: float = 0.0,
+    scheduled=False,
+):
     """Run one digest while holding the shared process-level lock."""
 
     selected_mode = mode or ("upcoming" if upcoming else "daily")
@@ -225,6 +232,15 @@ def main():
             log(f"Scheduled daily lock configuration error: {exc}")
             return 1
 
+    preflight_run = args.upcoming and args.dry_run
+    preflight_wait_seconds = 0.0
+    if preflight_run:
+        try:
+            preflight_wait_seconds = preflight_lock_wait_seconds()
+        except ValueError as exc:
+            log(f"Deploy preflight lock configuration error: {exc}")
+            return 1
+
     if args.status:
         report = build_status_report()
         if args.dry_run:
@@ -244,10 +260,14 @@ def main():
             return run_digest(
                 upcoming=args.upcoming,
                 dry_run=args.dry_run,
+                wait_seconds=preflight_wait_seconds,
                 scheduled=args.scheduled,
             )
         return run_digest(dry_run=args.dry_run, mode=mode)
     except DigestAlreadyRunning:
+        if preflight_run:
+            log("Deployment preflight stopped because the production digest is running")
+            return 75
         # A concurrent launch is a normal no-op for launchd. The Telegram
         # listener calls run_digest() directly and handles this exception so
         # it can show the user a useful status message.

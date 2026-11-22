@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from ..config import (
     LOCAL_TIMEZONE_NAME,
     daily_lock_wait_seconds,
+    preflight_lock_wait_seconds,
     gmail_batch_pause_seconds,
     gmail_batch_size,
     gmail_cache_file,
@@ -233,6 +234,7 @@ def build_status_report(now=None):
         ("GMAIL_BATCH_SIZE", gmail_batch_size),
         ("GMAIL_BATCH_PAUSE_SECONDS", gmail_batch_pause_seconds),
         ("MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS", daily_lock_wait_seconds),
+        ("MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS", preflight_lock_wait_seconds),
         ("MEETING_REMINDER_MINUTES", reminder_minutes),
         ("MEETING_REMINDER_WINDOW_MINUTES", reminder_window_minutes),
     ):
