@@ -290,6 +290,49 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Deploy ön kontrolü `.venv/bin/python` ve `python -m pip` işleyişini doğrular; bozuk venv için elle yeniden oluşturma komutunu bildirir ve venv'i otomatik değiştirmez. `ruff` ve `pyright`, yalnızca kendi `--version` kontrolleri başarılıysa kullanılır.
 - Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz. İstisna loglarında hata metni yerine sınıf adı kullanılır; Gmail API tanılama kayıtları yalnızca HTTP status/reason veya ağ istisnası türünü içerir.
 
+## Sorun giderme
+
+### 08:00 özeti gelmedi
+
+Telegram'da `/durum` yanıtını kontrol edin. `~/.hermes_local_automation/mail_digest/status.json` içindeki `daily_scheduled` kaydı başarıyı, hata türünü veya `skipped_lock` sonucunu gösterir. `skipped_lock` varsa ortak digest kilidini tutan işi belirleyip bitmesini bekleyin; kilit dosyasını silmeyin. Planlı özetin son teslim zamanı ve nedeni `/durum` uyarısında da görünür.
+
+### Gmail token'ı geçersiz veya geçici hata
+
+`invalid_grant` gibi kalıcı yenileme hatalarında OAuth yetkilendirmesini `.venv/bin/python scripts/gmail_auth.py` ile yenileyin. Ağ hatası, timeout veya rate limit geçiciyse bağlantı düzelmesini bekleyin; sync sınırlı backoff ile tekrar dener ve bu durum yeniden yetkilendirme gerektirmez. Hedef hesap yapılandırmasını `/durum` ile kontrol edin; adres gösterilmez.
+
+### Telegram 409
+
+409, aynı bot token'ı için başka bir polling süreci veya webhook bulunduğunu gösterir. Yalnızca tek bir poller çalıştırın; mevcut runtime sahibinin servis listesini inceleyip yinelenen işi kendi bakım prosedürüyle kapatın. Deploy betiğinin bilinen Hermes launchd korumasını kaldırmayın.
+
+### Bozuk Gmail veya parse cache'i
+
+Cache dosyaları türetilmiş yerel veridir; Gmail mailbox'ını değiştirmez. Önce cache'i kullanan launchd işlerini bakım prosedürünüzle durdurun. Aşağıdaki komut, varsayılan veya ortam değişkeniyle seçilmiş Gmail ve parse cache dosyalarını, SQLite `-wal`/`-shm` dosyalarıyla birlikte yedekleyip silmek yerine zaman damgalı `.corrupt-*` adlarına taşır:
+
+```bash
+stamp="$(date +%Y%m%d-%H%M%S)"
+for cache in \
+  "${GMAIL_CACHE_FILE:-$HOME/.hermes_local_automation/gmail/cache.sqlite3}" \
+  "${MAIL_DIGEST_PARSE_CACHE_FILE:-$HOME/.hermes_local_automation/mail_digest/parse_cache.sqlite3}"; do
+  for suffix in "" -wal -shm; do
+    file="$cache$suffix"
+    if [[ -f "$file" ]]; then
+      cp -p "$file" "$file.backup-$stamp"
+      mv "$file" "$file.corrupt-$stamp"
+    fi
+  done
+done
+```
+
+Sonraki Gmail dry-run cache'i salt-okunur API erişimiyle yeniden kurar; parse cache de sonraki ayrıştırmada yeniden oluşur. `credentials.json` veya `token.json` dosyalarını bu işlem için taşımayın ya da silmeyin.
+
+### Logda token görünürse
+
+Logların bulunduğu `logs/` dizininde eski ve sıkıştırılmış logları tarayıp token'ın her geçtiği yeri `[REDACTED]` ile temizleyin. launchd dosyaları açık tutabileceği için dosyaları yeniden adlandırmak yerine aynı inode'a yerinde yazın; dosyalara `0600`, `logs/` dizinine `0700` izin verin. Ardından BotFather üzerinden token'ı yenileyin, yeni değeri yalnızca `TELEGRAM_ENV_FILE` ile belirtilen özel dosyaya `0600` izinle kaydedin ve listener'ı runtime sahibinin prosedürüyle yeniden başlatın. Token'ı terminal çıktısına, rapora veya repoya kopyalamayın.
+
+### Log konumu
+
+Deploy edilen checkout içindeki `logs/` klasörü `output.log`, `error.log`, `reminder_output.log`, `reminder_error.log`, `listener_output.log` ve `listener_error.log` dosyalarını içerir. Log rotasyonu launchd'nin açık dosya tanıtıcılarını korumak için yerinde truncate kullanır.
+
 ## Test
 
 ```bash
