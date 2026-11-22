@@ -203,6 +203,8 @@ Uygulama ayarları aşağıdaki ortam değişkenlerinden veya Telegram kimlik bi
 | `TELEGRAM_UPDATE_STATE_FILE` | Polling update kimlik state'i; varsayılan `~/.hermes_local_automation/telegram/update_state.json`. |
 | `LISTENER_CONFLICT_BACKOFF_SECONDS` | Telegram getUpdates 409 çakışmasından sonra bekleme; varsayılan `300` saniye. Test ve kontrollü kullanımda `0` verilebilir. |
 
+Batch, bekleme, kilit ve state dosyası ayarları ilgili işlem başladığında okunur; süreç çalışırken `os.environ` üzerinden değiştirilen değerler sonraki işlemde görülür. Sayısal bir ayar geçersizse onu kullanan işlem açık bir yapılandırma hatası verir; `/durum` geçersiz batch, kilit bekleme veya hatırlatma ayarlarını uyarı olarak gösterir. Özel JSON state ve OAuth token dosyaları ortak atomik yazıcıyla aynı dizindeki geçici dosyaya yazılır, `0600` izinle fsync edilip atomik olarak değiştirilir; gerekli kullanıcı state dizinleri `0700` tutulur. Bozuk hatırlatma state'i hata sınıfı loglanarak `.corrupt` uzantısıyla karantinaya alınır.
+
 Telegram token'ını veya gerçek sohbet/kullanıcı kimliklerini kaynak koda, loglara ya da fixture'lara yazmayın.
 
 ## Gmail API kurulumu ve production kullanımı

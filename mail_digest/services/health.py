@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import stat
 from datetime import datetime, time as datetime_time, timedelta
-from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from ..config import (
     LOCAL_TIMEZONE_NAME,
-    REMINDER_STATE_FILE,
+    daily_lock_wait_seconds,
+    gmail_batch_pause_seconds,
+    gmail_batch_size,
     gmail_cache_file,
     gmail_token_file,
     local_now,
+    reminder_minutes,
+    reminder_state_file,
+    reminder_window_minutes,
 )
 from ..sources import selected_source_name
 from .reminder_state import load_last_successful_reminder_scan
@@ -219,16 +222,24 @@ def build_status_report(now=None):
     else:
         lines.append("Gmail önbelleği: yok")
 
-    reminder_path = Path(
-        os.environ.get("MEETING_REMINDER_STATE_FILE", str(REMINDER_STATE_FILE))
-    ).expanduser()
     reminder_scan = load_last_successful_reminder_scan(
-        state_file=reminder_path,
+        state_file=reminder_state_file(),
         now=now,
     )
     lines.append(f"Son hatırlatma taraması: {_format_time(reminder_scan)}")
 
     warnings = []
+    for variable_name, read_setting in (
+        ("GMAIL_BATCH_SIZE", gmail_batch_size),
+        ("GMAIL_BATCH_PAUSE_SECONDS", gmail_batch_pause_seconds),
+        ("MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS", daily_lock_wait_seconds),
+        ("MEETING_REMINDER_MINUTES", reminder_minutes),
+        ("MEETING_REMINDER_WINDOW_MINUTES", reminder_window_minutes),
+    ):
+        try:
+            read_setting()
+        except ValueError:
+            warnings.append(f"⚠️ Yapılandırma hatası: {variable_name}")
     if now.time() >= datetime_time(8, 0) and not scheduled_succeeded:
         warnings.append(
             f"⚠️ bugünkü planlı özet gönderilmedi: {scheduled_status}"

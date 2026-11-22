@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from ...config import GMAIL_BATCH_PAUSE_SECONDS, GMAIL_BATCH_SIZE, log
+from ...config import gmail_batch_pause_seconds, gmail_batch_size, log
 from .api import GmailApiError, GmailHistoryExpired, GmailNotFound
 from .mime import MessageStructureError, normalize_message
 from .store import RETENTION_VERSION
@@ -15,7 +15,6 @@ CALENDAR_WINDOW_MS = 366 * 86400 * 1000
 RETENTION_UPGRADE_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000
 FULL_SYNC_QUERIES = ("newer_than:31d", "newer_than:367d filename:ics")
 STAGE_BATCH_SIZE = 100
-FETCH_BATCH_SIZE = GMAIL_BATCH_SIZE
 
 
 class GmailSyncError(RuntimeError):
@@ -64,7 +63,7 @@ class GmailSynchronizer:
         max_full_attempts=2,
         stage_batch_size=STAGE_BATCH_SIZE,
         sleep=time.sleep,
-        batch_pause_seconds=GMAIL_BATCH_PAUSE_SECONDS,
+        batch_pause_seconds=None,
     ):
         self.api = api
         self.store = store
@@ -135,8 +134,9 @@ class GmailSynchronizer:
                     for message_id in self.api.iter_message_ids(query)
                 }
                 sorted_message_ids = sorted(message_ids)
-                for offset in range(0, len(sorted_message_ids), FETCH_BATCH_SIZE):
-                    message_batch = sorted_message_ids[offset:offset + FETCH_BATCH_SIZE]
+                batch_size = gmail_batch_size()
+                for offset in range(0, len(sorted_message_ids), batch_size):
+                    message_batch = sorted_message_ids[offset:offset + batch_size]
                     batch_results = self.api.get_messages_batch(
                         message_batch, format="full"
                     )
@@ -155,8 +155,14 @@ class GmailSynchronizer:
                             if len(snapshot_batch) >= self.stage_batch_size:
                                 self.store.stage_many(snapshot_batch)
                                 snapshot_batch = []
-                    if offset + FETCH_BATCH_SIZE < len(sorted_message_ids):
-                        self.sleep(self.batch_pause_seconds)
+                    if offset + batch_size < len(sorted_message_ids):
+                        pause_seconds = (
+                            gmail_batch_pause_seconds()
+                            if self.batch_pause_seconds is None
+                            else self.batch_pause_seconds
+                        )
+                        if pause_seconds > 0:
+                            self.sleep(pause_seconds)
                 if snapshot_batch:
                     self.store.stage_many(snapshot_batch)
                 affected, new_history_id = _affected_ids(

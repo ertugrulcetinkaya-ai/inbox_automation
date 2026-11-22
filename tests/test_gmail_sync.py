@@ -10,9 +10,9 @@ from mail_digest.sources.gmail.api import GmailApiError, GmailHistoryExpired, Gm
 from mail_digest.sources.gmail.auth import GmailAuthError
 from mail_digest.sources.gmail.store import GmailStore
 from mail_digest.services.meeting_service import build_digest_result
+from mail_digest.config import gmail_batch_size
 from mail_digest.sources.gmail.sync import (
     CALENDAR_WINDOW_MS,
-    FETCH_BATCH_SIZE,
     FULL_SYNC_QUERIES,
     GmailSynchronizer,
     RETENTION_UPGRADE_RETRY_INTERVAL_MS,
@@ -208,8 +208,9 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.api.batch_calls, [(sorted(self.api.listed), "full")])
 
     def test_full_sync_fetches_snapshot_in_configured_batches(self):
+        batch_size = gmail_batch_size()
         self.api.listed = [
-            f"message-{index:03d}" for index in range(2 * FETCH_BATCH_SIZE + 1)
+            f"message-{index:03d}" for index in range(2 * batch_size + 1)
         ]
         self.api.messages = {
             message_id: full_message(message_id) for message_id in self.api.listed
@@ -219,7 +220,7 @@ class GmailSyncTests(unittest.TestCase):
 
         self.assertEqual(
             [len(ids) for ids, _format in self.api.batch_calls],
-            [FETCH_BATCH_SIZE, FETCH_BATCH_SIZE, 1],
+            [batch_size, batch_size, 1],
         )
         self.assertEqual(self.sleeps, [1.0, 1.0])
         self.assertEqual(len(self.ids()), len(self.api.listed))

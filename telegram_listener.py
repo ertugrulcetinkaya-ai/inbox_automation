@@ -1,7 +1,6 @@
 import json
 import os
 import requests
-import tempfile
 import time
 import warnings
 from pathlib import Path
@@ -17,6 +16,7 @@ from mail_digest.cli import run_digest as execute_digest
 from mail_digest.commands import MEETING_COMMANDS, meeting_help_text
 from mail_digest.config import PROJECT_ROOT, load_env
 from mail_digest.delivery.telegram import send_text
+from mail_digest.fileio import atomic_write_private
 from mail_digest.services.lock import DigestAlreadyRunning
 from mail_digest.services.health import build_status_report
 from mail_digest.services.log_rotation import LISTENER_LOG_NAMES, rotate_logs
@@ -135,11 +135,6 @@ def _load_processed_update_ids(state_file):
 
 def _save_processed_update_ids(processed_update_ids, state_file):
     state_file = Path(state_file).expanduser()
-    try:
-        state_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        state_file.parent.chmod(0o700)
-    except OSError as exc:
-        raise TelegramUpdateStateError("Telegram update state directory is not writable") from exc
     retained = sorted(set(processed_update_ids))[-MAX_PROCESSED_UPDATE_IDS:]
     payload = json.dumps(
         {"processed_update_ids": retained},
@@ -147,40 +142,12 @@ def _save_processed_update_ids(processed_update_ids, state_file):
         separators=(",", ":"),
     )
     try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{state_file.name}.",
-            dir=str(state_file.parent),
-        )
-    except OSError as exc:
-        raise TelegramUpdateStateError("Telegram update state could not be staged") from exc
-    descriptor_open = True
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            descriptor_open = False
-            handle.write(payload)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, state_file)
-        state_file.chmod(0o600)
+        atomic_write_private(state_file, payload + "\n")
         if isinstance(processed_update_ids, set):
             processed_update_ids.clear()
             processed_update_ids.update(retained)
     except (OSError, TypeError, ValueError) as exc:
         raise TelegramUpdateStateError("Telegram update state could not be saved") from exc
-    finally:
-        if descriptor_open:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
 
 
 def _handle_update(update, token, chat_id, allowed_user_id=None):

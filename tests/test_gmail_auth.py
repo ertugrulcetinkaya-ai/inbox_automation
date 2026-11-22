@@ -118,7 +118,7 @@ class GmailAuthTests(unittest.TestCase):
                 return mock_handle
 
             with patch(
-                "mail_digest.sources.gmail.auth.os.fdopen",
+                "mail_digest.fileio.os.fdopen",
                 side_effect=failing_fdopen,
             ):
                 with self.assertRaisesRegex(OSError, "synthetic write failure"):

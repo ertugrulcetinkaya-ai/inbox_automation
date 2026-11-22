@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from ..config import LOCAL_TIMEZONE_NAME, REMINDER_STATE_FILE, local_now
+from ..config import LOCAL_TIMEZONE_NAME, log, local_now, reminder_state_file
+from ..fileio import atomic_write_private
 
 
 SENT_REMINDERS_KEY = "sent"
@@ -52,15 +51,27 @@ def load_reminder_state(state_file=None, now=None):
     catch-up cursor.
     """
 
-    path = Path(state_file or REMINDER_STATE_FILE).expanduser()
+    path = Path(state_file or reminder_state_file()).expanduser()
     now = now or local_now()
     if now.tzinfo is not None:
         now = now.astimezone(ZoneInfo(LOCAL_TIMEZONE_NAME)).replace(tzinfo=None)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, ValueError, TypeError):
+        raw_payload = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {SENT_REMINDERS_KEY: {}, LAST_SUCCESSFUL_SCAN_KEY: None}
+    except (OSError, UnicodeError) as exc:
+        log(f"Reminder state could not be read ({exc.__class__.__name__})")
+        _quarantine_corrupt_state(path)
+        return {SENT_REMINDERS_KEY: {}, LAST_SUCCESSFUL_SCAN_KEY: None}
+    try:
+        payload = json.loads(raw_payload)
+    except (ValueError, TypeError) as exc:
+        log(f"Reminder state is malformed ({exc.__class__.__name__})")
+        _quarantine_corrupt_state(path)
         return {SENT_REMINDERS_KEY: {}, LAST_SUCCESSFUL_SCAN_KEY: None}
     if not isinstance(payload, dict):
+        log("Reminder state is malformed (ValueError)")
+        _quarantine_corrupt_state(path)
         return {SENT_REMINDERS_KEY: {}, LAST_SUCCESSFUL_SCAN_KEY: None}
 
     if SENT_REMINDERS_KEY in payload:
@@ -99,13 +110,15 @@ def load_last_successful_reminder_scan(state_file=None, now=None):
     )[LAST_SUCCESSFUL_SCAN_KEY]
 
 
-def save_reminder_state(sent, last_successful_scan=None, state_file=None):
-    path = Path(state_file or REMINDER_STATE_FILE).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _quarantine_corrupt_state(path):
     try:
-        path.parent.chmod(0o700)
-    except OSError:
-        pass
+        path.replace(path.with_name(path.name + ".corrupt"))
+    except OSError as exc:
+        log(f"Reminder state could not be quarantined ({exc.__class__.__name__})")
+
+
+def save_reminder_state(sent, last_successful_scan=None, state_file=None):
+    path = Path(state_file or reminder_state_file()).expanduser()
     payload = json.dumps(
         {
             SENT_REMINDERS_KEY: sent,
@@ -118,25 +131,7 @@ def save_reminder_state(sent, last_successful_scan=None, state_file=None):
         ensure_ascii=True,
         sort_keys=True,
     )
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    temporary = Path(temporary_name)
-    try:
-        # mkstemp creates the file as 0600; keep the explicit mode assertion in
-        # case the platform's default ever changes.
-        temporary.chmod(0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-        temporary.replace(path)
-    except Exception:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-        raise
+    atomic_write_private(path, payload + "\n")
 
 
 def save_sent_reminders(sent, state_file=None):

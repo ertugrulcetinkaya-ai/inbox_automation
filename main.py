@@ -10,7 +10,6 @@ from mail_digest.config import (
     APPLE_SCRIPT_TIMEOUT_SECONDS,
     CALENDAR_MARKERS,
     ENGLISH_MONTHS,
-    ENV_FILE,
     FIELD_DELIMITER,
     ICS_MARKERS,
     LOCAL_TIMEZONE_NAME,
@@ -27,6 +26,7 @@ from mail_digest.config import (
     YEARLESS_DATE_ROLLOVER_THRESHOLD_DAYS,
     load_env,
     log,
+    telegram_env_file,
 )
 from mail_digest.delivery.telegram import send_telegram
 from mail_digest.models import Meeting, MeetingOccurrence, MeetingStatus
@@ -60,7 +60,6 @@ __all__ = [
     "APPLE_SCRIPT_TIMEOUT_SECONDS",
     "CALENDAR_MARKERS",
     "ENGLISH_MONTHS",
-    "ENV_FILE",
     "FIELD_DELIMITER",
     "ICS_MARKERS",
     "LOCAL_TIMEZONE_NAME",
@@ -103,6 +102,12 @@ __all__ = [
     "strip_quoted_reply",
     "main",
 ]
+
+
+def __getattr__(name):
+    if name == "ENV_FILE":
+        return telegram_env_file()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":

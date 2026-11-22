@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from ..config import DIGEST_LOCK_FILE
+from ..config import digest_lock_file
 
 
 class DigestAlreadyRunning(RuntimeError):
@@ -24,7 +24,7 @@ def digest_lock(lock_path: Path | None = None, wait_seconds: float = 0.0):
     therefore harmless and does not create a stale-lock failure.
     """
 
-    path = Path(lock_path or DIGEST_LOCK_FILE).expanduser()
+    path = Path(lock_path or digest_lock_file()).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+")
     locked = False

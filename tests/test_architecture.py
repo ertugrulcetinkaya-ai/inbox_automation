@@ -21,6 +21,12 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIs(main.Meeting, Meeting)
         self.assertIs(main.extract_meetings, extract_meetings)
 
+    def test_main_environment_file_compatibility_alias_is_lazy(self):
+        from unittest.mock import patch
+
+        with patch.dict("os.environ", {"TELEGRAM_ENV_FILE": "/tmp/synthetic-telegram.env"}):
+            self.assertEqual(str(main.ENV_FILE), "/tmp/synthetic-telegram.env")
+
     def test_shared_configuration_has_no_duplicate_keywords(self):
         from mail_digest.config import MEETING_KEYWORDS
 

@@ -71,7 +71,7 @@ class DigestLockTests(unittest.TestCase):
             def scheduled_caller():
                 results.append(run_digest(scheduled=True))
 
-            with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+            with patch.dict(os.environ, {"MAIL_DIGEST_LOCK_FILE": str(lock_path)}), patch(
                 "mail_digest.cli.daily_lock_wait_seconds", return_value=2.0
             ), patch.dict(os.environ, {"MAIL_DIGEST_STATUS_FILE": str(status_path)}):
                 with digest_lock(lock_path):
@@ -94,7 +94,7 @@ class DigestLockTests(unittest.TestCase):
             root = Path(directory)
             lock_path = root / "digest.lock"
             status_path = root / "status.json"
-            with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch(
+            with patch.dict(os.environ, {"MAIL_DIGEST_LOCK_FILE": str(lock_path)}), patch(
                 "mail_digest.cli.daily_lock_wait_seconds", return_value=0
             ), patch.dict(os.environ, {"MAIL_DIGEST_STATUS_FILE": str(status_path)}):
                 with digest_lock(lock_path):
@@ -161,7 +161,7 @@ except DigestAlreadyRunning:
         with tempfile.TemporaryDirectory() as directory:
             lock_path = Path(directory) / "digest.lock"
             status_path = Path(directory) / "status.json"
-            with patch("mail_digest.services.lock.DIGEST_LOCK_FILE", lock_path), patch.dict(
+            with patch.dict(os.environ, {"MAIL_DIGEST_LOCK_FILE": str(lock_path)}), patch.dict(
                 os.environ,
                 {"MAIL_DIGEST_STATUS_FILE": str(status_path)},
             ):

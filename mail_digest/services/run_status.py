@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 from ..config import log, local_now
+from ..fileio import atomic_write_private
 
 
 DEFAULT_STATUS_FILE = (
@@ -38,34 +38,10 @@ def _read_status(path):
 
 
 def _write_status(path, payload):
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.parent.chmod(0o700)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=str(path.parent)
+    atomic_write_private(
+        path,
+        json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n",
     )
-    descriptor_open = True
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            descriptor_open = False
-            json.dump(payload, handle, ensure_ascii=True, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-        path.chmod(0o600)
-    finally:
-        if descriptor_open:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
 
 
 def _record(mode, update):
