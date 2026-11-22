@@ -15,6 +15,7 @@ except ImportError:
 from mail_digest.cli import run_digest as execute_digest
 from mail_digest.commands import MEETING_COMMANDS, meeting_help_text
 from mail_digest.config import PROJECT_ROOT, load_env
+from mail_digest.delivery.commands import DUPLICATE, FULL, QUEUED, CommandWorker, parse_command
 from mail_digest.delivery.telegram import send_text
 from mail_digest.fileio import atomic_write_private
 from mail_digest.integrations.company_reporting import REPORT_SERVICE_UNAVAILABLE
@@ -63,10 +64,18 @@ def _rotate_listener_logs_if_due(last_rotation_at, now=None):
     return current
 
 
-def _run_company_report_command(text):
+def _run_company_report_command(text, *, send=True):
     from mail_digest.integrations.company_reporting import run_company_report_command
 
-    return run_company_report_command(text)
+    return run_company_report_command(text, send=send)
+
+
+def _is_registered_company_report_command(text):
+    from mail_digest.integrations.company_reporting import (
+        is_registered_company_report_command,
+    )
+
+    return is_registered_company_report_command(text)
 
 
 def _run_report_session_status():
@@ -212,7 +221,113 @@ def _save_processed_update_ids(processed_update_ids, state_file, update_attempts
         raise TelegramUpdateStateError("Telegram update state could not be saved") from exc
 
 
-def _handle_update(update, token, chat_id, allowed_user_id=None):
+def _queue_command(
+    command_worker,
+    queued_jobs,
+    key,
+    callback,
+    token,
+    chat_id,
+):
+    status, job = command_worker.enqueue(key, callback)
+    if status == QUEUED:
+        queued_jobs.append(job)
+        print("Command queued", flush=True)
+        return DONE
+    if status == DUPLICATE:
+        try:
+            delivered = send_text(token, chat_id, "Bu komut zaten sırada.")
+        except Exception as exc:
+            print(f"Duplicate command response failed ({exc.__class__.__name__})", flush=True)
+            return DONE
+        if not delivered:
+            print("Duplicate command response delivery failed", flush=True)
+        return DONE
+    if status == FULL:
+        return RETRY
+    return RETRY
+
+
+def _execute_company_report_command(text, token, chat_id):
+    parsed = parse_command(text)
+    if parsed is None:
+        return
+    if parsed.name not in {"/servis", "/fatura"} and not (
+        _is_registered_company_report_command(text)
+    ):
+        return DONE
+    result = _run_company_report_command(text, send=True)
+    if not isinstance(result, dict):
+        result = {
+            "ok": result != REPORT_SERVICE_UNAVAILABLE,
+            "response": result,
+            "matched": result != REPORT_SERVICE_UNAVAILABLE,
+            "suppress_reply": False,
+        }
+    if result.get("suppress_reply"):
+        return DONE if result.get("ok") else FAILED
+    response = result.get("response")
+    if response:
+        try:
+            if not send_text(token, chat_id, response):
+                print("Company report response delivery failed", flush=True)
+                return FAILED
+        except Exception as exc:
+            print(f"Company report response failed ({exc.__class__.__name__})", flush=True)
+            return FAILED
+    elif not result.get("ok"):
+        print("Company report command failed", flush=True)
+        return FAILED
+    return DONE
+
+
+def _run_queued_digest_command(token, chat_id, kwargs):
+    if _send_digest_command_response(token, chat_id, **kwargs) == RETRY:
+        print("Queued digest response delivery failed", flush=True)
+
+
+def _send_queued_session_status(token, chat_id):
+    if not send_text(token, chat_id, _run_report_session_status()):
+        print("Queued session status delivery failed", flush=True)
+
+
+def _run_queued_session_preparation(token, chat_id):
+    try:
+        if not send_text(token, chat_id, "SYS oturumu hazırlanıyor. MFA tamamlayın."):
+            print("Queued session preparation notice delivery failed", flush=True)
+        response = _run_prepare_report_session()
+        if not send_text(token, chat_id, response):
+            print("Queued session preparation response delivery failed", flush=True)
+    except Exception as exc:
+        print(f"Session preparation failed ({exc.__class__.__name__})", flush=True)
+        _send_side_effect_error(
+            token,
+            chat_id,
+            "Oturum hazırlığı tamamlanamadı; yinelenmemesi için tekrar çalıştırılmayacak.",
+        )
+
+
+def _run_company_report_update(text, token, chat_id):
+    try:
+        return _execute_company_report_command(text, token, chat_id)
+    except Exception as exc:
+        print(f"Company report command failed ({exc.__class__.__name__})", flush=True)
+        _send_side_effect_error(
+            token,
+            chat_id,
+            "Rapor komutu tamamlanamadı; yinelenmemesi için tekrar çalıştırılmayacak.",
+        )
+        return FAILED
+
+
+def _handle_update(
+    update,
+    token,
+    chat_id,
+    allowed_user_id=None,
+    command_worker=None,
+    queued_jobs=None,
+):
     if "message" not in update or not isinstance(update["message"], dict):
         return DONE
 
@@ -235,9 +350,14 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
         if str(sender.get("id")) != str(allowed_user_id):
             return DONE
 
-    normalized = (text or "").strip().lower().lstrip("/")
-    if normalized in {"komutlar", "help"}:
-        reporting_result = _run_company_report_command(text)
+    parsed = parse_command(text)
+    if parsed is None:
+        return DONE
+    command_name = parsed.name
+    command_text = command_name + (f" {parsed.args}" if parsed.args else "")
+
+    if command_name in {"/komutlar", "/help"}:
+        reporting_result = _run_company_report_command(command_name, send=False)
         if isinstance(reporting_result, dict):
             reporting_help = reporting_result.get("response")
         else:
@@ -247,68 +367,77 @@ def _handle_update(update, token, chat_id, allowed_user_id=None):
             help_text = f"{help_text}\n\n{reporting_help}"
         return DONE if send_text(token, chat_id, help_text) else RETRY
 
-    if normalized.startswith(("servis", "fatura")):
-        try:
-            registry_result = _run_company_report_command(text)
-        except Exception as exc:
-            print(f"Company report command failed ({exc.__class__.__name__})", flush=True)
-            _send_side_effect_error(
-                token,
-                chat_id,
-                "Rapor komutu tamamlanamadı; yinelenmemesi için tekrar çalıştırılmayacak.",
-            )
-            return FAILED
-        if isinstance(registry_result, str):
-            if registry_result == REPORT_SERVICE_UNAVAILABLE:
-                return DONE if send_text(token, chat_id, registry_result) else RETRY
-            try:
-                delivered = send_text(token, chat_id, registry_result)
-            except Exception as exc:
-                print(f"Company report response failed ({exc.__class__.__name__})", flush=True)
-                return FAILED
-            return DONE if delivered else FAILED
-        if isinstance(registry_result, dict) and registry_result.get("ok") is False:
-            return FAILED
-        return DONE
-
-    if normalized in {"session", "sys_session"}:
-        return DONE if send_text(token, chat_id, _run_report_session_status()) else RETRY
-
-    if normalized == "session_hazirla":
-        if not send_text(token, chat_id, "SYS oturumu hazırlanıyor. MFA tamamlayın."):
-            return RETRY
-        try:
-            response = _run_prepare_report_session()
-        except Exception as exc:
-            print(f"Session preparation failed ({exc.__class__.__name__})", flush=True)
-            _send_side_effect_error(
-                token,
-                chat_id,
-                "Oturum hazırlığı tamamlanamadı; yinelenmemesi için tekrar çalıştırılmayacak.",
-            )
-            return FAILED
-        try:
-            delivered = send_text(token, chat_id, response)
-        except Exception as exc:
-            print(f"Session preparation response failed ({exc.__class__.__name__})", flush=True)
-            return FAILED
-        return DONE if delivered else FAILED
-
-    command = (text or "").strip().lower()
-    mode = MEETING_COMMANDS.get(command)
-    if mode == "daily":
-        print("Command received: meeting digest", flush=True)
-        return _send_digest_command_response(token, chat_id)
-    elif mode == "upcoming":
-        print("Command received: upcoming meeting digest", flush=True)
-        return _send_digest_command_response(token, chat_id, upcoming=True)
-    elif mode in {"weekly", "attention"}:
-        print(f"Command received: {mode} meeting digest", flush=True)
-        return _send_digest_command_response(token, chat_id, mode=mode)
-    elif command in {"/durum", "/status"}:
+    if command_name in {"/durum", "/status"}:
         print("Command received: status", flush=True)
         return DONE if send_text(token, chat_id, build_status_report()) else RETRY
-    return DONE
+
+    if command_name == "/session_hazirla":
+        if command_worker is None:
+            if not send_text(token, chat_id, "SYS oturumu hazırlanıyor. MFA tamamlayın."):
+                return RETRY
+            response = _run_prepare_report_session()
+            try:
+                delivered = send_text(token, chat_id, response)
+            except Exception as exc:
+                print(f"Session preparation response failed ({exc.__class__.__name__})", flush=True)
+                return FAILED
+            return DONE if delivered else FAILED
+        return _queue_command(
+            command_worker,
+            queued_jobs,
+            ("session", "prepare"),
+            lambda: _run_queued_session_preparation(token, chat_id),
+            token,
+            chat_id,
+        )
+
+    if command_name in {"/session", "/sys_session"}:
+        if command_worker is None:
+            return DONE if send_text(token, chat_id, _run_report_session_status()) else RETRY
+        return _queue_command(
+            command_worker,
+            queued_jobs,
+            ("session", "status"),
+            lambda: _send_queued_session_status(token, chat_id),
+            token,
+            chat_id,
+        )
+
+    mode = MEETING_COMMANDS.get(command_name)
+    if mode == "daily":
+        print("Command received: meeting digest", flush=True)
+        kwargs = {}
+    elif mode == "upcoming":
+        print("Command received: upcoming meeting digest", flush=True)
+        kwargs = {"upcoming": True}
+    elif mode in {"weekly", "attention"}:
+        print(f"Command received: {mode} meeting digest", flush=True)
+        kwargs = {"mode": mode}
+    else:
+        kwargs = None
+    if kwargs is not None:
+        if command_worker is None:
+            return _send_digest_command_response(token, chat_id, **kwargs)
+        return _queue_command(
+            command_worker,
+            queued_jobs,
+            ("digest", mode),
+            lambda: _run_queued_digest_command(token, chat_id, kwargs),
+            token,
+            chat_id,
+        )
+
+    if command_worker is None:
+        return _run_company_report_update(command_text, token, chat_id)
+
+    return _queue_command(
+        command_worker,
+        queued_jobs,
+        ("report", command_text.casefold()),
+        lambda: _run_company_report_update(command_text, token, chat_id),
+        token,
+        chat_id,
+    )
 
 
 def process_update(
@@ -319,6 +448,7 @@ def process_update(
     processed_update_ids=None,
     state_file=None,
     update_attempts=None,
+    command_worker=None,
 ):
     """Handle one update and persist its retry or terminal state."""
 
@@ -337,9 +467,17 @@ def process_update(
         return DONE
 
     attempts = update_attempts if update_attempts is not None else {}
+    queued_jobs = []
     error_type = "DeliveryFailure"
     try:
-        outcome = _handle_update(update, token, chat_id, allowed_user_id=allowed_user_id)
+        outcome = _handle_update(
+            update,
+            token,
+            chat_id,
+            allowed_user_id=allowed_user_id,
+            command_worker=command_worker,
+            queued_jobs=queued_jobs,
+        )
     except TelegramConfigurationError:
         raise
     except Exception as exc:
@@ -366,8 +504,17 @@ def process_update(
         else:
             attempts[update_id] = attempt_count
 
-    if state_file is not None:
-        _save_processed_update_ids(processed, state_file, attempts)
+    try:
+        if state_file is not None:
+            _save_processed_update_ids(processed, state_file, attempts)
+    except Exception:
+        if command_worker is not None:
+            for job in queued_jobs:
+                command_worker.activate(job, persisted=False)
+        raise
+    if command_worker is not None:
+        for job in queued_jobs:
+            command_worker.activate(job, persisted=outcome == DONE)
     return outcome
 
 
@@ -396,6 +543,8 @@ def main():
             )
             return 1
 
+        command_worker = CommandWorker()
+        command_worker.start()
         offset = 0
         poll_backoff = POLL_BACKOFF_INITIAL_SECONDS
         while True:
@@ -429,6 +578,7 @@ def main():
                         processed_update_ids=processed_update_ids,
                         state_file=state_file,
                         update_attempts=update_attempts,
+                        command_worker=command_worker,
                     )
                     if outcome == RETRY:
                         break

@@ -52,9 +52,10 @@ Bağımsız `telegram_listener.py`, bu bot için tek polling ve komut sahibidir.
 
 ### Diğer komutlar
 
-- `/help` ve `/komutlar`, önce yukarıdaki toplantı komutlarını gösterir; isteğe bağlı rapor paketi bulunuyorsa rapor komutlarını da ekler.
+- `/help` ve `/komutlar`, önce yukarıdaki toplantı komutlarını gösterir; isteğe bağlı rapor paketi bulunuyorsa `send=False` ile rapor yardımını da ekler.
 - `/durum` ve `/status`, her digest modunun son başarı/başarısızlık zamanını, seçili mail kaynağını, hedef hesabın yapılandırılma durumunu (adres göstermeden), Gmail token dosyasının izin ve süre bilgisini, salt-okunur cache yaşını/kayıt sayısını ve son hatırlatma taramasını gösterir. Hedef hesap yapılandırılmamışsa uyarı verir.
-- `servis*`, `fatura*`, `/session`, `/sys_session` ve `/session_hazirla` komutları yalnızca aynı Python ortamında isteğe bağlı Company Reporting paketi kuruluysa çalışır. Paket yoksa `Rapor servisi bu ortamda hazır değil; toplantı komutları yine kullanılabilir.` yanıtı verilir.
+- `/servis`, `/fatura` ve isteğe bağlı rapor paketindeki kayıtlı slash komutları rapor yönlendirmesine alınır; düz `servis`/`fatura` metinleri yok sayılır. `/session`, `/sys_session` ve `/session_hazirla` yalnızca aynı Python ortamında isteğe bağlı Company Reporting paketi kuruluysa çalışır. Paket yoksa tanınan servis komutuna `Rapor servisi bu ortamda hazır değil; toplantı komutları yine kullanılabilir.` yanıtı verilir.
+- Telegram komut adı ilk sözcükten ayrıştırılır; `/hafta@BotAdi argüman` gibi mesajlarda bot eki ve argümanlar alias eşleşmesini bozmaz. Digest ve rapor işleri tek worker kuyruğunda sırayla çalışırken polling devam eder; `/durum` ve yardım komutları doğrudan yanıtlanır. Aynı digest/rapor işi bekliyor veya çalışıyorsa ikinci kopya `Bu komut zaten sırada.` yanıtını alır. Kuyruğa alınan update, iş worker'a açılmadan önce kalıcı update state dosyasına yazılır.
 
 Rapor yalnızca yerel dosyaları okur; OAuth token'ını yenilemez. `main.py --status --dry-run` raporu terminale yazar; `main.py --status` Telegram'a gönderir. Her gerçek (dry-run olmayan) `run_digest()` çağrısı mod başına zamanları varsayılan `~/.hermes_local_automation/mail_digest/status.json` dosyasına atomik ve `0600` izinle kaydeder; dry-run bu dosyayı değiştirmez. Yolu `MAIL_DIGEST_STATUS_FILE` ile değiştirebilirsiniz. Durum kaydı yazılamazsa yalnızca hata sınıfı loglanır ve digest devam eder.
 
