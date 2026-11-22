@@ -273,6 +273,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Hatırlatma taraması `(son başarılı tarama, şimdi + lead time]` aralığını yakalar; ilk taramada küçük bir kurtarma örtüşmesi kullanılır. State cursor'ı yalnızca tarama ve gönderim başarılı olunca ilerler.
 - Kilit yolunu farklı bir makine veya çalışma ortamı için `MAIL_DIGEST_LOCK_FILE` ile değiştirebilirsiniz.
 - Mac Mini için bu depodaki `scripts/deploy_mac_mini.sh` kullanılır. Varsayılanı kontrol ve önizleme yapar; summary, reminder ve listener plist'lerini yazma ile launchd `bootout`/`bootstrap` işlemleri yalnızca `--apply` verildiğinde yapılır. `--apply` bu kod değişikliği sırasında çalıştırılmaz.
+- `--apply`, her launchd label'ı için `bootout` sonrasında `launchctl print` başarısız olana dek en çok 30 saniye bekler; ardından `bootstrap` işlemini üç kez dener ve başarısız denemelerin hata metnini yazar. `DEPLOY_WAIT_STEP_SECONDS` bekleme adımını saniye cinsinden ayarlar (varsayılan `1`); bootstrap denemeleri arasındaki bekleme bunun üç katıdır. Sentetik deploy testlerinde `DEPLOY_WAIT_STEP_SECONDS=0` beklemeleri atlar.
 - Deploy ön kontrolü `.venv/bin/python` ve `python -m pip` işleyişini doğrular; bozuk venv için elle yeniden oluşturma komutunu bildirir ve venv'i otomatik değiştirmez. `ruff` ve `pyright`, yalnızca kendi `--version` kontrolleri başarılıysa kullanılır.
 - Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz.
 

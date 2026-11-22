@@ -18,6 +18,12 @@ if [[ $# -eq 1 ]]; then
     APPLY=true
 fi
 
+DEPLOY_WAIT_STEP_SECONDS="${DEPLOY_WAIT_STEP_SECONDS:-1}"
+if [[ ! "$DEPLOY_WAIT_STEP_SECONDS" =~ ^[0-9]+$ ]]; then
+    printf 'DEPLOY_WAIT_STEP_SECONDS must be a non-negative integer.\n' >&2
+    exit 2
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
@@ -148,11 +154,44 @@ if [[ "$APPLY" == true ]]; then
         printf 'Başarısız label: %s\n' "$failed_label" >&2
     }
 
+    wait_until_unloaded() {
+        local service_label="$1"
+        local attempt
+        for ((attempt = 0; attempt < 30; attempt++)); do
+            if ! launchctl print "$service_label" >/dev/null 2>&1; then
+                return 0
+            fi
+            sleep "$DEPLOY_WAIT_STEP_SECONDS"
+        done
+        if ! launchctl print "$service_label" >/dev/null 2>&1; then
+            return 0
+        fi
+        return 1
+    }
+
     for index in "${!LABELS[@]}"; do
         label="${LABELS[$index]}"
         plist="${PLISTS[$index]}"
         launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
-        if ! launchctl bootstrap "$DOMAIN" "$plist"; then
+
+        if ! wait_until_unloaded "$DOMAIN/$label"; then
+            report_launchd_failure "$label"
+            exit 1
+        fi
+
+        bootstrap_succeeded=false
+        for bootstrap_attempt in 1 2 3; do
+            # Capture stderr only; launchctl stdout is discarded.
+            if bootstrap_error="$(launchctl bootstrap "$DOMAIN" "$plist" 2>&1 >/dev/null)"; then
+                bootstrap_succeeded=true
+                break
+            fi
+            printf '%s: deneme %s: %s\n' "$label" "$bootstrap_attempt" "$bootstrap_error" >&2
+            if [[ "$bootstrap_attempt" -lt 3 ]]; then
+                sleep "$((DEPLOY_WAIT_STEP_SECONDS * 3))"
+            fi
+        done
+        if [[ "$bootstrap_succeeded" != true ]]; then
             report_launchd_failure "$label"
             exit 1
         fi
