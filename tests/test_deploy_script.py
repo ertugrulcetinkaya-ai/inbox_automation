@@ -26,8 +26,10 @@ class DeployScriptTests(unittest.TestCase):
         target_config_ok=True,
         bootstrap_failure_count=0,
         bootstrap_fail_label="",
+        rollback_bootstrap_failure_count=0,
         wait_label="",
         wait_print_successes=0,
+        prior_plists=False,
         broken_pip_shebang=False,
         python_check_failure="",
         quality_tools_fail=False,
@@ -38,6 +40,20 @@ class DeployScriptTests(unittest.TestCase):
         repo = temp_root / "repo"
         fake_bin = temp_root / "bin"
         fake_bin.mkdir()
+        home_dir = temp_root / "home"
+        temp_dir = temp_root / "tmp"
+        temp_dir.mkdir()
+        launch_agents = home_dir / "Library" / "LaunchAgents"
+        if prior_plists:
+            launch_agents.mkdir(parents=True)
+            for name in (
+                "com.ertugrul.mail.unread.summary",
+                "com.ertugrul.mail.meeting.reminder",
+                "com.ertugrul.mail.unread.listener",
+            ):
+                (launch_agents / f"{name}.plist").write_text(
+                    f"previous:{name}\n", encoding="utf-8"
+                )
         (repo / "scripts").mkdir(parents=True)
         (repo / ".venv" / "bin").mkdir(parents=True)
         (repo / "scripts" / "deploy_mac_mini.sh").write_bytes(
@@ -71,6 +87,10 @@ set -euo pipefail
 if [[ "${1:-}" == list ]]; then printf '%s\\n' "$DEPLOY_TEST_LAUNCHD"; exit 0; fi
 printf '%s\\n' "$*" >> "$DEPLOY_TEST_LAUNCHCTL_LOG"
 if [[ "${1:-}" == bootout ]]; then
+  label="${2##*/}"
+  : > "${DEPLOY_TEST_LAUNCHCTL_LOG}.bootout.$label"
+  rm -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.loaded.$label"
+  rm -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.print_count"
   if [[ -n "$DEPLOY_TEST_WAIT_LABEL" && "$2" == *"$DEPLOY_TEST_WAIT_LABEL" ]]; then
     : > "${DEPLOY_TEST_LAUNCHCTL_LOG}.wait_pending"
   fi
@@ -84,14 +104,28 @@ if [[ "${1:-}" == bootstrap ]]; then
   if [[ -f "$count_file" ]]; then read -r count < "$count_file"; fi
   count=$((count + 1))
   printf '%s\\n' "$count" > "$count_file"
-  if [[ "$label" == "$DEPLOY_TEST_BOOTSTRAP_FAIL_LABEL" && "$count" -le "$DEPLOY_TEST_BOOTSTRAP_FAILURE_COUNT" ]]; then
+  prior_plist=false
+  if [[ -f "$3" ]] && grep -q '^previous:' "$3"; then prior_plist=true; fi
+  if [[ "$prior_plist" == true ]]; then
+    rollback_count_file="${DEPLOY_TEST_LAUNCHCTL_LOG}.rollback_count.$label"
+    rollback_count=0
+    if [[ -f "$rollback_count_file" ]]; then read -r rollback_count < "$rollback_count_file"; fi
+    rollback_count=$((rollback_count + 1))
+    printf '%s\\n' "$rollback_count" > "$rollback_count_file"
+    if [[ "$rollback_count" -le "$DEPLOY_TEST_ROLLBACK_BOOTSTRAP_FAILURE_COUNT" ]]; then
+      printf '%s\\n' "Rollback bootstrap failed: fixture I/O error" >&2
+      exit 5
+    fi
+  elif [[ "$label" == "$DEPLOY_TEST_BOOTSTRAP_FAIL_LABEL" && "$count" -le "$DEPLOY_TEST_BOOTSTRAP_FAILURE_COUNT" ]]; then
     printf '%s\\n' "$DEPLOY_TEST_BOOTSTRAP_ERROR" >&2
     exit 5
   fi
+  : > "${DEPLOY_TEST_LAUNCHCTL_LOG}.loaded.$label"
   exit 0
 fi
 if [[ "${1:-}" == print ]]; then
-  if [[ -n "$DEPLOY_TEST_WAIT_LABEL" && "$2" == *"$DEPLOY_TEST_WAIT_LABEL" && -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.wait_pending" ]]; then
+  label="${2##*/}"
+  if [[ -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.bootout.$label" && -n "$DEPLOY_TEST_WAIT_LABEL" && "$2" == *"$DEPLOY_TEST_WAIT_LABEL" && -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.wait_pending" ]]; then
     count=0
     count_file="${DEPLOY_TEST_LAUNCHCTL_LOG}.print_count"
     if [[ -f "$count_file" ]]; then read -r count < "$count_file"; fi
@@ -99,9 +133,14 @@ if [[ "${1:-}" == print ]]; then
     printf '%s\\n' "$count" > "$count_file"
     if [[ "$count" -le "$DEPLOY_TEST_WAIT_PRINT_SUCCESSES" ]]; then exit 0; fi
     rm -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.wait_pending"
+    if [[ -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.loaded.$label" ]]; then exit 0; fi
     exit 1
   fi
-  if [[ "$DEPLOY_TEST_LAUNCHD" == *"${2##*/}"* ]]; then exit 0; fi
+  if [[ -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.bootout.$label" ]]; then
+    if [[ -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.loaded.$label" ]]; then exit 0; fi
+    exit 1
+  fi
+  if [[ -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.loaded.$label" || "$DEPLOY_TEST_LAUNCHD" == *"$label"* ]]; then exit 0; fi
   exit 1
 fi
 """,
@@ -113,6 +152,10 @@ fi
         fake_python.write_text(
             "#!/usr/bin/env bash\n"
             "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_PYTHON_LOG\"\n"
+            "if [[ \"$*\" == *scripts/install_launchd.py* && \"$*\" == *--install* ]]; then\n"
+            "  mkdir -p \"$HOME/Library/LaunchAgents\"\n"
+            "  for name in com.ertugrul.mail.unread.summary com.ertugrul.mail.meeting.reminder com.ertugrul.mail.unread.listener; do printf 'new:%s\\n' \"$name\" > \"$HOME/Library/LaunchAgents/$name.plist\"; done\n"
+            "fi\n"
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == import && \"$*\" == '-c import sys' ]]; then exit 1; fi\n"
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == pip && \"$*\" == '-m pip --version' ]]; then exit 1; fi\n"
             "if [[ \"$DEPLOY_TEST_TARGET_CONFIG_OK\" == false && \"$*\" == '-c from mail_digest.config import target_email; target_email()' ]]; then exit 1; fi\n"
@@ -146,7 +189,8 @@ fi
         env.update(
             {
                 "PATH": f"{fake_bin}:{env['PATH']}",
-                "HOME": str(temp_root / "home"),
+                "HOME": str(home_dir),
+                "TMPDIR": str(temp_dir),
                 "DEPLOY_TEST_REPO": str(repo),
                 "DEPLOY_TEST_BRANCH": branch,
                 "DEPLOY_TEST_DIRTY": "true" if dirty else "false",
@@ -158,6 +202,9 @@ fi
                 "DEPLOY_TEST_TARGET_CONFIG_OK": "true" if target_config_ok else "false",
                 "DEPLOY_TEST_BOOTSTRAP_FAILURE_COUNT": str(bootstrap_failure_count),
                 "DEPLOY_TEST_BOOTSTRAP_FAIL_LABEL": bootstrap_fail_label,
+                "DEPLOY_TEST_ROLLBACK_BOOTSTRAP_FAILURE_COUNT": str(
+                    rollback_bootstrap_failure_count
+                ),
                 "DEPLOY_TEST_BOOTSTRAP_ERROR": "Bootstrap failed: 5: Input/output error",
                 "DEPLOY_TEST_WAIT_LABEL": wait_label,
                 "DEPLOY_TEST_WAIT_PRINT_SUCCESSES": str(wait_print_successes),
@@ -206,6 +253,8 @@ fi
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Would run: launchctl bootstrap", result.stdout)
         self.assertFalse(launchctl_log.exists())
+        backup_root = python_log.parent / "home" / ".hermes_local_automation" / "deploy-backups"
+        self.assertFalse(backup_root.exists())
         calls = python_log.read_text(encoding="utf-8").splitlines()
         install_call = next(call for call in calls if "scripts/install_launchd.py" in call)
         self.assertIn("--include-listener", install_call)
@@ -368,6 +417,7 @@ fi
             launchd_output=loaded_labels,
             bootstrap_failure_count=3,
             bootstrap_fail_label=label,
+            prior_plists=True,
         )
 
         self.assertNotEqual(result.returncode, 0)
@@ -383,6 +433,93 @@ fi
             if command.startswith("bootstrap ") and command.endswith(f"{label}.plist")
         ]
         self.assertEqual(len(bootstrap_commands), 3)
+
+    def test_second_service_failure_restores_plists_and_previous_loaded_services(self):
+        summary = "com.ertugrul.mail.unread.summary"
+        reminder = "com.ertugrul.mail.meeting.reminder"
+        listener = "com.ertugrul.mail.unread.listener"
+        result, launchctl_log, _ = self.run_deploy(
+            apply=True,
+            launchd_output=f"{summary} {listener}",
+            bootstrap_failure_count=3,
+            bootstrap_fail_label=reminder,
+            rollback_bootstrap_failure_count=2,
+            wait_label=summary,
+            wait_print_successes=2,
+            prior_plists=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Rollback: restored plist for", result.stderr)
+        self.assertIn("Rollback: bootstrapped previous service " + summary, result.stderr)
+        self.assertIn("Rollback: bootstrapped previous service " + listener, result.stderr)
+        self.assertIn(
+            f"{summary}: deneme 1: Rollback bootstrap failed: fixture I/O error",
+            result.stderr,
+        )
+        self.assertIn(
+            f"{summary}: deneme 2: Rollback bootstrap failed: fixture I/O error",
+            result.stderr,
+        )
+        self.assertIn("Rollback completed; previous loaded services were restored.", result.stderr)
+
+        launch_agents = launchctl_log.parent / "home" / "Library" / "LaunchAgents"
+        for label in (summary, reminder, listener):
+            restored = (launch_agents / f"{label}.plist").read_text(encoding="utf-8")
+            self.assertEqual(restored, f"previous:{label}\n")
+
+        commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+        reminder_failures = [
+            index
+            for index, command in enumerate(commands)
+            if command.startswith("bootstrap ") and command.endswith(f"{reminder}.plist")
+        ]
+        self.assertEqual(len(reminder_failures), 3)
+        rollback_bootouts = [
+            index
+            for index, command in enumerate(commands)
+            if command.startswith("bootout ") and command.endswith(summary)
+        ]
+        self.assertGreater(rollback_bootouts[-1], reminder_failures[-1])
+        rollback_summary_bootstrap = max(
+            index
+            for index, command in enumerate(commands)
+            if command.startswith("bootstrap ") and command.endswith(f"{summary}.plist")
+        )
+        rollback_listener_bootstrap = max(
+            index
+            for index, command in enumerate(commands)
+            if command.startswith("bootstrap ") and command.endswith(f"{listener}.plist")
+        )
+        self.assertGreater(rollback_summary_bootstrap, rollback_bootouts[-1])
+        self.assertGreater(rollback_listener_bootstrap, rollback_summary_bootstrap)
+        summary_bootstraps = [
+            index
+            for index, command in enumerate(commands)
+            if command.startswith("bootstrap ") and command.endswith(f"{summary}.plist")
+        ]
+        self.assertEqual(len(summary_bootstraps), 4)
+        rollback_prints = [
+            command
+            for command in commands[rollback_bootouts[-1] + 1 : rollback_summary_bootstrap]
+            if command.startswith("print ") and command.endswith(summary)
+        ]
+        self.assertGreaterEqual(len(rollback_prints), 3)
+        self.assertTrue(Path(f"{launchctl_log}.loaded.{summary}").exists())
+        self.assertTrue(Path(f"{launchctl_log}.loaded.{listener}").exists())
+        self.assertFalse(Path(f"{launchctl_log}.loaded.{reminder}").exists())
+
+        backups = list(
+            (
+                launchctl_log.parent
+                / "home"
+                / ".hermes_local_automation"
+                / "deploy-backups"
+            ).glob("inbox_launchd_backup.*")
+        )
+        self.assertEqual(len(backups), 1)
+        saved_loaded = (backups[0] / "loaded_labels").read_text(encoding="utf-8")
+        self.assertEqual(saved_loaded.splitlines(), [summary, listener])
 
 
 if __name__ == "__main__":
