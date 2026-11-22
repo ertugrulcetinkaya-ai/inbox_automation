@@ -1,4 +1,4 @@
-"""Offline safety tests for the Mac Mini deploy preview."""
+"""Offline safety tests for Mac Mini deploy preview and rollback behavior."""
 
 from __future__ import annotations
 
