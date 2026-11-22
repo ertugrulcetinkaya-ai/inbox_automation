@@ -175,7 +175,7 @@ python3 -m venv .venv
 ortamının transitive runtime bağımlılıklarını exact sürümlerle taşır; CI lock
 dosyasını kurup onun tamamını audit eder.
 
-Apple Mail yalnızca yerel rollback çalıştıracaksanız açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası değiştirilebilir. İsteğe bağlı Company Reporting komutları, aynı Python ortamında kurulu bir paket/adapter üzerinden yüklenir; listener başka bir checkout'u `sys.path` ile çalışma zamanında enjekte etmez. Bağımsız listener kullanılıyorsa işlenmiş Telegram update kimlikleri varsayılan olarak `~/.hermes_local_automation/telegram/update_state.json` dosyasında kalıcı tutulur; `TELEGRAM_UPDATE_STATE_FILE` ile değiştirilebilir.
+Apple Mail yalnızca yerel rollback çalıştıracaksanız açık olmalı ve terminale Mail otomasyon izni verilmelidir. `TELEGRAM_ENV_FILE` ile kimlik bilgisi dosyası değiştirilebilir. İsteğe bağlı Company Reporting komutları, aynı Python ortamında kurulu bir paket/adapter üzerinden yüklenir; listener başka bir checkout'u `sys.path` ile çalışma zamanında enjekte etmez. Bağımsız listener kullanılıyorsa işlenmiş Telegram update kimlikleri ve geçici deneme sayaçları varsayılan olarak `~/.hermes_local_automation/telegram/update_state.json` dosyasında kalıcı tutulur; `TELEGRAM_UPDATE_STATE_FILE` ile değiştirilebilir. Yanıt teslim edilemeyen güncelleme en fazla üç kez denenir; poll hatalarının beklemesi 5 saniyeden başlayıp 60 saniyeye kadar artar ve başarılı poll sonrasında sıfırlanır.
 
 ## Yapılandırma
 

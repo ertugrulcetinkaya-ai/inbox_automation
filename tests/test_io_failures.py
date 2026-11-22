@@ -13,6 +13,9 @@ from mail_digest.config import SecretFilePermissionError, load_env
 from mail_digest.delivery.telegram import send_telegram, send_text
 from mail_digest.sources.apple_mail import fetch_mail
 from telegram_listener import (
+    DONE,
+    FAILED,
+    RETRY,
     TelegramConfigurationError,
     _load_processed_update_ids,
     process_update,
@@ -328,7 +331,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, patch(
             "telegram_listener._run_digest_for_command",
-            return_value=(True, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."),
+            return_value=(DONE, "Bugünün toplantı özeti Telegram sohbetinize gönderildi."),
         ) as run_digest, patch("telegram_listener.send_text") as send:
             self.assertTrue(
                 process_update(
@@ -357,7 +360,7 @@ class TelegramUpdateStateTests(unittest.TestCase):
             with self.subTest(response=response[:12]), tempfile.TemporaryDirectory() as directory:
                 with patch(
                     "telegram_listener._run_digest_for_command",
-                    return_value=(False, response),
+                    return_value=(RETRY if "hazırlanıyor" in response else FAILED, response),
                 ), patch("telegram_listener.send_text") as send:
                     self.assertTrue(
                         process_update(
@@ -390,14 +393,15 @@ class TelegramUpdateStateTests(unittest.TestCase):
                         state_file=state_file,
                     )
                 )
-                self.assertFalse(
+                self.assertEqual(
                     process_update(
                         update,
                         "fixture-token",
                         "fixture-chat",
                         processed_update_ids=processed,
                         state_file=state_file,
-                    )
+                    ),
+                    DONE,
                 )
 
             send.assert_called_once()

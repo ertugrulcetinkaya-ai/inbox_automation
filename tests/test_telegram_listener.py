@@ -14,10 +14,14 @@ from unittest.mock import Mock, patch
 from mail_digest.commands import MEETING_COMMANDS, meeting_help_text
 from mail_digest.integrations.company_reporting import REPORT_SERVICE_UNAVAILABLE
 from telegram_listener import (
+    DONE,
+    FAILED,
     GET_UPDATES_CONFLICT_MESSAGE,
+    RETRY,
     TelegramConfigurationError,
     TelegramUpdateStateError,
     _listener_conflict_backoff_seconds,
+    _load_listener_state,
     _load_processed_update_ids,
     main,
     process_update,
@@ -70,7 +74,7 @@ class TelegramListenerCommandTests(unittest.TestCase):
         for index, (alias, mode) in enumerate(MEETING_COMMANDS.items(), start=10):
             with self.subTest(alias=alias), patch(
                 "telegram_listener._run_digest_for_command",
-                return_value=(True, "sent"),
+                return_value=(DONE, "sent"),
             ) as run_digest:
                 process_update(self.update(index, alias), "token", "fixture-chat")
 
@@ -174,6 +178,34 @@ class TelegramListenerCommandTests(unittest.TestCase):
         send.assert_called_once_with("fixture-token", "fixture-chat", "Local status")
         self.assertIn(GET_UPDATES_CONFLICT_MESSAGE, output.getvalue())
 
+    def test_main_retries_undelivered_update_without_advancing_offset(self):
+        env = {"TELEGRAM_BOT_TOKEN": "fixture-token", "TELEGRAM_CHAT_ID": "fixture-chat"}
+        update = self.update(8, "/status")
+        first_poll = Mock(status_code=200)
+        first_poll.json.return_value = {"result": [update]}
+        second_poll = Mock(status_code=200)
+        second_poll.json.return_value = {"result": [update]}
+        conflict = Mock(status_code=409)
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener.rotate_logs"
+        ), patch("telegram_listener.load_env", return_value=env), patch(
+            "telegram_listener._update_state_file", return_value=Path(directory) / "state.json"
+        ), patch(
+            "telegram_listener.requests.get", side_effect=[first_poll, second_poll, conflict]
+        ) as get, patch(
+            "telegram_listener.build_status_report", return_value="Local status"
+        ), patch("telegram_listener.send_text", side_effect=[False, True]), patch(
+            "telegram_listener.time.sleep"
+        ):
+            with patch.dict(os.environ, {"LISTENER_CONFLICT_BACKOFF_SECONDS": "0"}):
+                result = main()
+
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            [call.kwargs["params"]["offset"] for call in get.call_args_list],
+            [0, 0, 9],
+        )
+
     def test_main_stops_when_persisted_state_is_corrupt(self):
         output = StringIO()
         env = {"TELEGRAM_BOT_TOKEN": "fixture-token", "TELEGRAM_CHAT_ID": "fixture-chat"}
@@ -190,6 +222,163 @@ class TelegramListenerCommandTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("Fatal error in listener", output.getvalue())
         get.assert_not_called()
+
+    def test_status_exception_is_retried_three_times_then_acknowledged(self):
+        update = self.update(70, "/status")
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "state.json"
+            processed = set()
+            attempts = {}
+            with patch(
+                "telegram_listener.build_status_report",
+                side_effect=RuntimeError("private report detail"),
+            ) as report, redirect_stdout(output):
+                outcomes = [
+                    process_update(
+                        update,
+                        "token",
+                        "fixture-chat",
+                        processed_update_ids=processed,
+                        state_file=state_file,
+                        update_attempts=attempts,
+                    )
+                    for _ in range(3)
+                ]
+                duplicate = process_update(
+                    update,
+                    "token",
+                    "fixture-chat",
+                    processed_update_ids=processed,
+                    state_file=state_file,
+                    update_attempts=attempts,
+                )
+
+            self.assertEqual(outcomes, [RETRY, RETRY, FAILED])
+            self.assertEqual(duplicate, DONE)
+            self.assertEqual(report.call_count, 3)
+            self.assertEqual(processed, {70})
+            self.assertEqual(attempts, {})
+            self.assertEqual(_load_listener_state(state_file), ({70}, {}))
+            self.assertIn("RuntimeError", output.getvalue())
+            self.assertNotIn("private report detail", output.getvalue())
+
+    def test_status_send_failure_retries_are_bounded_and_persisted(self):
+        update = self.update(71, "/status")
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "state.json"
+            processed = set()
+            attempts = {}
+            with patch("telegram_listener.build_status_report", return_value="Local status"), patch(
+                "telegram_listener.send_text", return_value=False
+            ) as send:
+                first = process_update(
+                    update,
+                    "token",
+                    "fixture-chat",
+                    processed_update_ids=processed,
+                    state_file=state_file,
+                    update_attempts=attempts,
+                )
+                self.assertEqual(_load_listener_state(state_file), (set(), {71: 1}))
+                processed, attempts = _load_listener_state(state_file)
+                second = process_update(
+                    update,
+                    "token",
+                    "fixture-chat",
+                    processed_update_ids=processed,
+                    state_file=state_file,
+                    update_attempts=attempts,
+                )
+                processed, attempts = _load_listener_state(state_file)
+                third = process_update(
+                    update,
+                    "token",
+                    "fixture-chat",
+                    processed_update_ids=processed,
+                    state_file=state_file,
+                    update_attempts=attempts,
+                )
+                duplicate = process_update(
+                    update,
+                    "token",
+                    "fixture-chat",
+                    processed_update_ids=processed,
+                    state_file=state_file,
+                    update_attempts=attempts,
+                )
+
+            self.assertEqual([first, second, third], [RETRY, RETRY, FAILED])
+            self.assertEqual(duplicate, DONE)
+            self.assertEqual(send.call_count, 3)
+            self.assertEqual(_load_listener_state(state_file), ({71}, {}))
+
+    def test_digest_exception_is_not_retried_after_side_effect_starts(self):
+        update = self.update(72, "/bugun")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener.execute_digest",
+            side_effect=RuntimeError("private digest detail"),
+        ) as digest, patch("telegram_listener.send_text", return_value=True) as send:
+            state_file = Path(directory) / "state.json"
+            processed = set()
+            attempts = {}
+            first = process_update(
+                update,
+                "token",
+                "fixture-chat",
+                processed_update_ids=processed,
+                state_file=state_file,
+                update_attempts=attempts,
+            )
+            second = process_update(
+                update,
+                "token",
+                "fixture-chat",
+                processed_update_ids=processed,
+                state_file=state_file,
+                update_attempts=attempts,
+            )
+
+        self.assertEqual(first, FAILED)
+        self.assertEqual(second, DONE)
+        digest.assert_called_once_with(upcoming=False, wait_seconds=30)
+        send.assert_called_once()
+
+    def test_company_report_exception_is_terminal_after_dispatch_starts(self):
+        update = self.update(73, "/servis")
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener._run_company_report_command",
+            side_effect=RuntimeError("private report payload"),
+        ) as report, patch("telegram_listener.send_text", return_value=True) as send, redirect_stdout(
+            output
+        ):
+            state_file = Path(directory) / "state.json"
+            processed = set()
+            attempts = {}
+            first = process_update(
+                update,
+                "token",
+                "fixture-chat",
+                processed_update_ids=processed,
+                state_file=state_file,
+                update_attempts=attempts,
+            )
+            second = process_update(
+                update,
+                "token",
+                "fixture-chat",
+                processed_update_ids=processed,
+                state_file=state_file,
+                update_attempts=attempts,
+            )
+
+        self.assertEqual(first, FAILED)
+        self.assertEqual(second, DONE)
+        report.assert_called_once_with("/servis")
+        send.assert_called_once()
+        self.assertIn("RuntimeError", output.getvalue())
+        self.assertNotIn("private report payload", output.getvalue())
 
 
 class TelegramListenerPollingTests(unittest.TestCase):
@@ -218,7 +407,7 @@ class TelegramListenerPollingTests(unittest.TestCase):
             os.environ.pop("LISTENER_CONFLICT_BACKOFF_SECONDS", None)
             self.assertEqual(_listener_conflict_backoff_seconds(), 300)
 
-    def test_polling_exception_redacts_token_before_retry(self):
+    def test_polling_exception_logs_only_error_class_before_retry(self):
         output = StringIO()
         token = "fixture-secret-token"
         env = {"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_CHAT_ID": "fixture-chat"}
@@ -236,9 +425,34 @@ class TelegramListenerPollingTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
         self.assertNotIn(token, output.getvalue())
-        self.assertIn("[REDACTED]", output.getvalue())
+        self.assertIn("RuntimeError", output.getvalue())
         sleep.assert_any_call(5)
         sleep.assert_any_call(0)
+
+    def test_polling_backoff_grows_and_resets_after_successful_poll(self):
+        output = StringIO()
+        env = {"TELEGRAM_BOT_TOKEN": "fixture-token", "TELEGRAM_CHAT_ID": "fixture-chat"}
+        success = Mock(status_code=200)
+        success.json.return_value = {"result": []}
+        conflict = Mock(status_code=409)
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "telegram_listener.rotate_logs"
+        ), patch("telegram_listener.load_env", return_value=env), patch(
+            "telegram_listener._update_state_file", return_value=Path(directory) / "state.json"
+        ), patch(
+            "telegram_listener._load_listener_state", return_value=(set(), {})
+        ), patch(
+            "telegram_listener.requests.get",
+            side_effect=[RuntimeError("first"), RuntimeError("second"), success,
+                         RuntimeError("after success"), conflict],
+        ), patch("telegram_listener.time.sleep") as sleep, redirect_stdout(output):
+            with patch.dict(os.environ, {"LISTENER_CONFLICT_BACKOFF_SECONDS": "0"}):
+                result = main()
+
+        self.assertEqual(result, 1)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [5, 10, 5, 0])
+        self.assertIn("retrying in 10 seconds", output.getvalue())
+        self.assertNotIn("first", output.getvalue())
 
     def test_missing_credentials_exits_nonzero(self):
         output = StringIO()
