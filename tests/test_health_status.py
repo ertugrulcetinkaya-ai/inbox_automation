@@ -115,6 +115,19 @@ class HealthStatusTests(unittest.TestCase):
         get.assert_not_called()
         post.assert_not_called()
 
+    def test_scheduled_digest_waits_before_daily_deadline(self):
+        with patch.dict(os.environ, {"MAIL_DIGEST_DAILY_DEADLINE": "08:15"}):
+            report = build_status_report(now=datetime(2026, 11, 21, 7, 59))
+
+        self.assertIn("Planlı günlük özet (08:00): bekleniyor", report)
+        self.assertNotIn("bugünkü planlı özet gönderilmedi", report)
+
+    def test_missing_scheduled_digest_warns_after_daily_deadline(self):
+        with patch.dict(os.environ, {"MAIL_DIGEST_DAILY_DEADLINE": "08:15"}):
+            report = build_status_report(now=datetime(2026, 11, 21, 8, 20))
+
+        self.assertIn("bugünkü planlı özet gönderilmedi: henüz gönderilmedi", report)
+
     def test_corrupt_status_is_reported(self):
         self.status_path.write_text("not-json", encoding="utf-8")
 
@@ -162,7 +175,7 @@ class HealthStatusTests(unittest.TestCase):
 
         self.assertIn("• daily: son başarı 2026-11-21 12:00", report)
         self.assertIn("Planlı günlük özet (08:00): başarısız", report)
-        self.assertIn("bugünkü planlı özet gönderilmedi: başarısız", report)
+        self.assertIn("bugünkü planlı özet gönderilmedi: başarısız (ValueError)", report)
 
     def test_scheduled_daily_skip_is_recorded_and_reported(self):
         skipped_at = self.now.replace(hour=8, minute=1)
@@ -176,6 +189,7 @@ class HealthStatusTests(unittest.TestCase):
         report = build_status_report(now=self.now)
 
         self.assertIn("Planlı günlük özet (08:00): atlandı (kilit dolu)", report)
+        self.assertIn("bugünkü planlı özet gönderilmedi: atlandı (kilit dolu)", report)
 
     def test_invalid_lazy_setting_does_not_break_listener_status_and_is_reported(self):
         with patch.dict(os.environ, {"GMAIL_BATCH_SIZE": "51"}):
