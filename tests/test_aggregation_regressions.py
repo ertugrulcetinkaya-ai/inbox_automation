@@ -2,6 +2,7 @@ import unittest
 from datetime import date, datetime
 
 from main import format_digest, format_upcoming_digest, parse_ics_meetings
+from mail_digest.services.meeting_service import build_digest_result
 from parse_cache_test_support import isolate_parse_cache
 
 isolate_parse_cache()
@@ -78,11 +79,62 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
     def test_equal_sequence_cancel_wins_over_duplicate_confirmation(self):
         confirmed = ics_record(sequence=3, start="20260815T100000")
         cancelled = ics_record(sequence=3, start="20260815T100000", status="CANCELLED")
+        confirmed["source_received_at"] = datetime(2026, 8, 14, 10, 0)
+        cancelled["source_received_at"] = datetime(2026, 8, 14, 9, 0)
 
         self.assertEqual(parse_ics_meetings(confirmed)[0].status, "CONFIRMED")
         digest = format_upcoming_digest([confirmed, cancelled], date(2026, 8, 14))
 
         self.assertIn("Bugün veya sonrasında toplantı yok.", digest)
+
+    def test_equal_sequence_newer_confirmation_beats_older_tentative(self):
+        older_tentative = ics_record(
+            uid="same-sequence-status",
+            sequence=2,
+            start="20260920T100000",
+            status="TENTATIVE",
+        )
+        newer_confirmed = ics_record(
+            uid="same-sequence-status",
+            sequence=2,
+            start="20260920T100000",
+            status="CONFIRMED",
+        )
+        older_tentative["source_received_at"] = datetime(2026, 9, 12, 9, 0)
+        newer_confirmed["source_received_at"] = datetime(2026, 9, 12, 10, 0)
+
+        result = build_digest_result(
+            [older_tentative, newer_confirmed],
+            "daily",
+            target_date=date(2026, 9, 20),
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertEqual(result.meetings[0]["status"], "CONFIRMED")
+        self.assertNotIn("Kesinleşmedi", result.message)
+
+    def test_semantic_lifecycle_uses_source_freshness_before_status_priority(self):
+        older_tentative = {
+            "sender": "Fixture Organizer <fixture@example.com>",
+            "subject": "Status meeting",
+            "content": "20 Eylül 2026 saat 10:00 için taslak toplantı.",
+            "source_received_at": datetime(2026, 9, 12, 9, 0),
+        }
+        newer_confirmed = {
+            "sender": "Fixture Organizer <fixture@example.com>",
+            "subject": "Status meeting",
+            "content": "20 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            "source_received_at": datetime(2026, 9, 12, 10, 0),
+        }
+
+        result = build_digest_result(
+            [older_tentative, newer_confirmed],
+            "daily",
+            target_date=date(2026, 9, 20),
+        )
+
+        self.assertEqual(result.count, 1)
+        self.assertEqual(result.meetings[0]["status"], "CONFIRMED")
 
     def test_cancellation_does_not_hide_different_uid_with_same_subject(self):
         cancelled = ics_record(

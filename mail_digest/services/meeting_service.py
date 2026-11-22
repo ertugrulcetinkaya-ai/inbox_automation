@@ -20,9 +20,9 @@ from ..parsing.ics import (
     parse_ics_event_definitions,
     recurrence_identity,
 )
+from ..parsing.lifecycle import lifecycle_should_replace
 from ..parsing.meeting_parser import _meeting_to_digest_record, extract_meetings
 from .parse_cache import ParseCache, ParseCacheUnavailable, cache_key
-from ..utils import record_source_received_at
 
 
 TR_OUTPUT_MONTHS = (
@@ -121,13 +121,6 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
 
     meetings = [meeting for parsed in parsed_records for meeting in parsed]
 
-    status_priority = {
-        "CONFIRMED": 0,
-        "TENTATIVE": 1,
-        "RESCHEDULED": 2,
-        "CANCELLED": 3,
-    }
-
     def text_key(value):
         return re.sub(r"\W+", " ", str(value or "").casefold()).strip()
 
@@ -220,26 +213,8 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
         recurrence_id = meeting.get("recurrence_id")
         return uid, recurrence_identity(recurrence_id)
 
-    def freshness_key(meeting):
-        received_at = record_source_received_at(meeting)
-        if received_at is None:
-            return (0, 0.0)
-        return (1, received_at.timestamp())
-
     def should_replace(current, candidate):
-        if candidate.get("sequence", 0) != current.get("sequence", 0):
-            return candidate.get("sequence", 0) > current.get("sequence", 0)
-        candidate_priority = status_priority.get(candidate.get("status"), 0)
-        current_priority = status_priority.get(current.get("status"), 0)
-        if candidate_priority != current_priority:
-            return candidate_priority > current_priority
-        candidate_freshness = freshness_key(candidate)
-        current_freshness = freshness_key(current)
-        if candidate_freshness != current_freshness:
-            return candidate_freshness > current_freshness
-        # Equal timestamps are unusual, but a stable final tie-breaker keeps
-        # aggregation independent of Gmail's record ordering.
-        return candidate.get("source_message_id", "") > current.get("source_message_id", "")
+        return lifecycle_should_replace(current, candidate)
 
     masters = {}
     overrides = {}
