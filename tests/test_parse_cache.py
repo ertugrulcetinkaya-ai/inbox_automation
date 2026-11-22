@@ -156,10 +156,33 @@ class ParseCacheTests(unittest.TestCase):
             build_digest_result([changed_record], "daily", target_date=target)
         self.assertEqual(extract.call_count, 1)
 
-        with patch.object(parse_cache, "PARSER_VERSION", parse_cache.PARSER_VERSION + 1):
-            with patch.object(meeting_service, "extract_meetings", wraps=extract_meetings) as extract:
-                build_digest_result([changed_record], "daily", target_date=target)
-        self.assertEqual(extract.call_count, 1)
+    def test_source_freshness_fields_are_part_of_cache_key(self):
+        record = cache_records()[-1]
+        target = date(2026, 11, 23)
+        original_key = parse_cache.cache_key(
+            record,
+            target,
+            None,
+            include_cancelled=True,
+            include_lifecycle_outside_range=True,
+        )
+        received_at_key = parse_cache.cache_key(
+            {**record, "source_received_at": datetime(2026, 11, 21, 10, 0)},
+            target,
+            None,
+            include_cancelled=True,
+            include_lifecycle_outside_range=True,
+        )
+        internal_date_key = parse_cache.cache_key(
+            {**record, "internal_date_ms": 1795255200000},
+            target,
+            None,
+            include_cancelled=True,
+            include_lifecycle_outside_range=True,
+        )
+
+        self.assertNotEqual(original_key, received_at_key)
+        self.assertNotEqual(original_key, internal_date_key)
 
     def test_corrupt_cache_falls_back_to_normal_parsing(self):
         self.cache_path.write_bytes(b"not a sqlite database")

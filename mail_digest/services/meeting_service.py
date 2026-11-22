@@ -23,6 +23,7 @@ from ..parsing.ics import (
 from ..parsing.lifecycle import lifecycle_should_replace
 from ..parsing.meeting_parser import _meeting_to_digest_record, extract_meetings
 from .parse_cache import ParseCache, ParseCacheUnavailable, cache_key
+from ..utils import record_source_received_at
 
 
 TR_OUTPUT_MONTHS = (
@@ -189,8 +190,18 @@ def _collect_meetings(records, start_date, end_date=None) -> list[MeetingOccurre
         side lacks a thread (Apple Mail or older cache records), fall back to
         canonical sender email plus normalized subject family. A date-only
         lifecycle update deliberately matches any time on that date, while a
-        timed update remains exact.
+        timed update remains exact. Semantic updates must be strictly newer
+        than the candidate and cannot replace UID-backed calendar authority.
         """
+
+        if candidate.get("uid"):
+            return False
+        update_received_at = record_source_received_at(update)
+        candidate_received_at = record_source_received_at(candidate)
+        if update_received_at is None or candidate_received_at is None:
+            return False
+        if update_received_at <= candidate_received_at:
+            return False
 
         update_date, update_minutes = occurrence_parts(update, update_start_at)
         candidate_date, candidate_minutes = occurrence_parts(candidate)

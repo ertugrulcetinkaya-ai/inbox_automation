@@ -2,6 +2,7 @@ import unittest
 from datetime import date
 
 from main import extract_meetings
+from mail_digest.parsing.meeting_parser import _semantic_status
 from mail_digest.services.meeting_service import format_attention_digest
 from mail_digest.utils import strip_quoted_reply
 from parse_cache_test_support import isolate_parse_cache
@@ -19,6 +20,20 @@ def record(subject, content):
 
 
 class SemanticFalsePositiveTests(unittest.TestCase):
+    def test_cancellation_policy_is_not_an_event_cancellation(self):
+        self.assertEqual(
+            _semantic_status("Meeting invitation: cancellation policy for 31 August."),
+            "CONFIRMED",
+        )
+
+    def test_cancellation_takes_precedence_over_reschedule_wording(self):
+        self.assertEqual(
+            _semantic_status(
+                "The meeting was rescheduled and then cancelled by the organizer."
+            ),
+            "CANCELLED",
+        )
+
     def test_visit_report_dates_are_not_meetings_when_only_body_mentions_a_meeting(self):
         candidate = record(
             "10.08.2026 Saha Ziyaret Raporu",
@@ -90,6 +105,51 @@ class SemanticFalsePositiveTests(unittest.TestCase):
 
         self.assertIn("Ağustos değerlendirmesi", digest)
         self.assertIn("düşük güvenli ayrıştırma", digest)
+
+    def test_ics_filename_text_does_not_block_semantic_fallback(self):
+        candidate = record(
+            "Ağustos değerlendirmesi",
+            "Görüşmemiz 31 Ağustos 2026 saat 14:00'te yapılacak; plan.ics dosyasını da ekledim.",
+        )
+
+        meetings = extract_meetings(candidate, date(2026, 8, 24))
+
+        self.assertEqual(len(meetings), 1)
+        self.assertEqual(meetings[0]["date"], date(2026, 8, 31))
+        self.assertEqual(meetings[0]["time"], "14:00")
+
+    def test_valid_ics_series_with_no_occurrence_keeps_empty_ics_result(self):
+        candidate = record(
+            "Synthetic calendar meeting",
+            "22 Kasım 2026 saat 14:00 toplantısı yapılacaktır.",
+        )
+        candidate["content"] += (
+            "\nBEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n"
+            "UID:out-of-range-series\n"
+            "DTSTART;TZID=Europe/Istanbul:20261110T100000\n"
+            "RRULE:FREQ=DAILY;COUNT=1\n"
+            "SUMMARY:Out of range\nEND:VEVENT\nEND:VCALENDAR\n"
+        )
+
+        meetings = extract_meetings(
+            candidate,
+            date(2026, 11, 22),
+            date(2026, 11, 22),
+        )
+
+        self.assertEqual(meetings, [])
+
+    def test_cross_midnight_text_range_uses_next_day_end(self):
+        candidate = record(
+            "Ağustos değerlendirmesi",
+            "31 Ağustos 2026 saat 23:30 - 00:30 arasında toplantı yapılacak.",
+        )
+
+        meetings = extract_meetings(candidate, date(2026, 8, 24))
+
+        self.assertEqual(len(meetings), 1)
+        self.assertEqual(meetings[0]["time"], "23:30–00:30")
+        self.assertEqual(meetings[0]["end_sort_minutes"], 24 * 60 + 30)
 
 
 if __name__ == "__main__":

@@ -65,10 +65,12 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
             "sender": "Fixture Organizer <organizer@example.com>",
             "subject": "Satış toplantısı",
             "content": "15 Ağustos 2026 saat 10:00 toplantısı yapılacaktır.",
+            "source_received_at": datetime(2026, 8, 14, 9, 0),
         }
         rescheduled = {
             **original,
             "content": "15 Ağustos toplantımız 20 Ağustos 14:00'e ertelendi.",
+            "source_received_at": datetime(2026, 8, 14, 10, 0),
         }
 
         daily = format_digest([original, rescheduled], date(2026, 8, 15))
@@ -177,11 +179,13 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
             "sender": "Organizer <organizer@example.com>",
             "subject": "Satış toplantısı",
             "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            "source_received_at": datetime(2026, 9, 14, 9, 0),
         }
         cancellation = {
             "sender": "Different display name <organizer@example.com>",
             "subject": "Satış toplantısı iptali",
             "content": "15 Eylül 2026 tarihindeki toplantımız iptal edilmiştir.",
+            "source_received_at": datetime(2026, 9, 14, 10, 0),
         }
 
         digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
@@ -194,11 +198,13 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
             "sender": "Organizer <organizer@example.com>",
             "subject": "Program değişikliği",
             "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            "source_received_at": datetime(2026, 9, 14, 9, 0),
         }
         cancellation = {
             "sender": "Calendar Service <organizer@example.com>",
             "subject": "Program değişikliği",
             "content": "15 Eylül 2026 tarihindeki toplantımız iptal edilmiştir.",
+            "source_received_at": datetime(2026, 9, 14, 10, 0),
         }
 
         digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
@@ -212,18 +218,82 @@ class MeetingAggregationRegressionTests(unittest.TestCase):
             "sender": "Organizer <organizer@example.com>",
             "subject": "Satış toplantısı",
             "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            "source_received_at": datetime(2026, 9, 14, 9, 0),
         }
         cancellation = {
             "thread_id": "gmail-thread-1",
             "sender": "Calendar Service <calendar@example.com>",
             "subject": "Etkinlik iptal bildirimi",
             "content": "15 Eylül 2026 tarihindeki etkinlik iptal edilmiştir.",
+            "source_received_at": datetime(2026, 9, 14, 10, 0),
         }
 
         digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
 
         self.assertIn("Bugün veya sonrasında toplantı yok.", digest)
         self.assertNotIn("Satış toplantısı", digest)
+
+    def test_not_newer_text_cancellation_does_not_suppress_meeting(self):
+        original = {
+            "sender": "Organizer <organizer@example.com>",
+            "subject": "Satış toplantısı",
+            "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            "source_received_at": datetime(2026, 9, 14, 10, 0),
+        }
+        cancellation = {
+            "sender": "Calendar Service <organizer@example.com>",
+            "subject": "Satış toplantısı iptali",
+            "content": "15 Eylül 2026 tarihindeki toplantımız iptal edilmiştir.",
+            "source_received_at": datetime(2026, 9, 14, 9, 0),
+        }
+
+        digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
+
+        self.assertIn("15 Eylül 2026", digest)
+        self.assertIn("Satış toplantısı", digest)
+
+    def test_date_less_text_cancellation_does_not_use_received_date_as_target(self):
+        original = {
+            "thread_id": "gmail-thread-no-date",
+            "sender": "Organizer <organizer@example.com>",
+            "subject": "Satış toplantısı",
+            "content": "15 Eylül 2026 saat 10:00 toplantısı yapılacaktır.",
+            "source_received_at": datetime(2026, 9, 15, 8, 0),
+        }
+        cancellation = {
+            "thread_id": "gmail-thread-no-date",
+            "sender": "Calendar Service <calendar@example.com>",
+            "subject": "Toplantı iptal bildirimi",
+            "content": "Toplantı iptal edilmiştir.",
+            "received_date": date(2026, 9, 15),
+            "source_received_at": datetime(2026, 9, 15, 9, 0),
+        }
+
+        digest = format_upcoming_digest([original, cancellation], date(2026, 9, 1))
+
+        self.assertIn("15 Eylül 2026", digest)
+        self.assertIn("Satış toplantısı", digest)
+
+    def test_text_cancellation_does_not_suppress_uid_ics_event(self):
+        invitation = ics_record(
+            uid="uid-backed-invitation",
+            sequence=0,
+            start="20260915T100000",
+        )
+        invitation["thread_id"] = "gmail-thread-ics"
+        invitation["source_received_at"] = datetime(2026, 9, 14, 9, 0)
+        cancellation = {
+            "thread_id": "gmail-thread-ics",
+            "sender": "Calendar Service <calendar@example.com>",
+            "subject": "Event cancellation",
+            "content": "The 15 September 2026 meeting has been cancelled.",
+            "source_received_at": datetime(2026, 9, 14, 10, 0),
+        }
+
+        digest = format_upcoming_digest([invitation, cancellation], date(2026, 9, 1))
+
+        self.assertIn("15 Eylül 2026", digest)
+        self.assertIn("Aynı toplantı", digest)
 
     def test_date_only_cancellation_from_different_sender_does_not_suppress(self):
         original = {

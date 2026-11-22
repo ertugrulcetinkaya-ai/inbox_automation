@@ -11,7 +11,7 @@ from email.parser import Parser
 
 from dateutil.rrule import rrulestr
 
-from ..config import ICS_MARKERS, LOCAL_TIMEZONE_NAME, local_now
+from ..config import LOCAL_TIMEZONE_NAME, local_now
 from ..models import Meeting
 from ..utils import record_source_received_at
 from .dates import parse_received_date
@@ -703,13 +703,12 @@ def _ics_payloads_from_record(record):
     content = record.get("content", "") or ""
     raw_source = record.get("raw_source", "") or ""
 
-    if any(marker in content.casefold() for marker in ICS_MARKERS):
+    if _has_ics_component(content):
         detected = True
         payloads.append(content)
 
     if raw_source:
-        raw_lower = raw_source.casefold()
-        if any(marker in raw_lower for marker in ICS_MARKERS):
+        if _has_ics_component(raw_source):
             detected = True
             payloads.append(raw_source)
         try:
@@ -719,18 +718,25 @@ def _ics_payloads_from_record(record):
                 filename = (part.get_filename() or "").casefold()
                 if content_type != "text/calendar" and not filename.endswith(".ics"):
                     continue
-                detected = True
                 payload = part.get_payload(decode=True)
                 if isinstance(payload, bytes):
                     charset = part.get_content_charset() or "utf-8"
                     payload = payload.decode(charset, errors="replace")
                 elif payload is None:
                     payload = part.get_payload()
-                if isinstance(payload, str):
+                if isinstance(payload, str) and _has_ics_component(payload):
+                    detected = True
                     payloads.append(payload)
         except (TypeError, ValueError):
             pass
     return detected, payloads
+
+
+def _has_ics_component(text):
+    return any(
+        line.strip().upper() in {"BEGIN:VCALENDAR", "BEGIN:VEVENT"}
+        for line in _unfold_ics_lines(text)
+    )
 
 
 def parse_ics_event_definitions(record):

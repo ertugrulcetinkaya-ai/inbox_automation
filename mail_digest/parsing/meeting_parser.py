@@ -27,6 +27,12 @@ except ImportError:  # pragma: no cover - Python 3.9+ provides zoneinfo
 
 
 SEMANTIC_CONTEXT_RADIUS = 160
+LIFECYCLE_POLICY_EXCLUSION_RE = re.compile(
+    r"\b(?:iptal\s+(?:politika\w*|koşul\w*|kosul\w*|şart\w*|sart\w*)|"
+    r"cancellation\s+(?:polic(?:y|ies)|terms|conditions)|"
+    r"cancel\s+(?:polic(?:y|ies)|terms|conditions))\b",
+    re.IGNORECASE,
+)
 EXPLICIT_MEETING_CONTEXT_RE = re.compile(
     r"(?:\b(?:"
     r"toplant[ıi]\w*|meeting\w*|appointment\w*|randevu\w*|"
@@ -71,9 +77,13 @@ def _meeting_to_digest_record(
         label = start_at.strftime("%H:%M")
         sort_minutes = start_at.hour * 60 + start_at.minute
         end_sort_minutes = None
-        if isinstance(end_at, datetime) and end_at.date() == start_at.date():
+        if isinstance(end_at, datetime):
+            day_offset = (end_at.date() - start_at.date()).days
+        else:
+            day_offset = -1
+        if isinstance(end_at, datetime) and 0 <= day_offset <= 1:
             label = f"{label}–{end_at.strftime('%H:%M')}"
-            end_sort_minutes = end_at.hour * 60 + end_at.minute
+            end_sort_minutes = day_offset * 24 * 60 + end_at.hour * 60 + end_at.minute
     else:
         label = "Tüm gün"
         sort_minutes = 24 * 60
@@ -187,13 +197,28 @@ def _received_date_for_record(record, fallback_date):
 
 
 def _semantic_status(text):
-    """Infer lifecycle state from human-written cancellation/update language."""
+    """Infer lifecycle state from update language near meeting context only."""
     normalized = turkish_fold(text)
-    if SEMANTIC_RESCHEDULED_RE.search(normalized):
-        return "RESCHEDULED"
-    if SEMANTIC_CANCELLED_RE.search(normalized):
+    anchors = [match.span() for match in EXPLICIT_MEETING_CONTEXT_RE.finditer(normalized)]
+    for keyword in MEETING_KEYWORDS + ("davet",):
+        normalized_keyword = turkish_fold(keyword)
+        pattern = re.compile(rf"\b{re.escape(normalized_keyword)}\w*\b")
+        anchors.extend(match.span() for match in pattern.finditer(normalized))
+
+    contexts = [
+        normalized[
+            max(0, start - SEMANTIC_CONTEXT_RADIUS):
+            min(len(normalized), end + SEMANTIC_CONTEXT_RADIUS)
+        ]
+        for start, end in anchors
+    ]
+    contexts = [LIFECYCLE_POLICY_EXCLUSION_RE.sub(" ", context) for context in contexts]
+
+    if any(SEMANTIC_CANCELLED_RE.search(context) for context in contexts):
         return "CANCELLED"
-    if SEMANTIC_TENTATIVE_RE.search(normalized):
+    if any(SEMANTIC_RESCHEDULED_RE.search(context) for context in contexts):
+        return "RESCHEDULED"
+    if any(SEMANTIC_TENTATIVE_RE.search(context) for context in contexts):
         return "TENTATIVE"
     return "CONFIRMED"
 
@@ -223,8 +248,11 @@ def _semantic_meeting_from_date_hit(
             datetime_time(time_info["minutes"] // 60, time_info["minutes"] % 60),
         )
         if time_info.get("end_minutes") is not None:
+            end_date = date_hit["date"]
+            if time_info["end_minutes"] < time_info["minutes"]:
+                end_date += timedelta(days=1)
             end_at = datetime.combine(
-                date_hit["date"],
+                end_date,
                 datetime_time(
                     time_info["end_minutes"] // 60,
                     time_info["end_minutes"] % 60,
@@ -339,21 +367,9 @@ def extract_meetings(
         if date_hits:
             matching_dates = [date_hits[0]]
         else:
-            return [
-                _meeting_to_digest_record(
-                    Meeting(
-                        title=subject or "Başlıksız toplantı",
-                        organizer=record.get("sender", "") or "Bilinmeyen gönderen",
-                        thread_id=str(record.get("thread_id") or ""),
-                        start_at=received_date or start_date,
-                        status="CANCELLED",
-                        source_message_id=record.get("source_message_id", ""),
-                        confidence=0.70,
-                        source_received_at=record_source_received_at(record),
-                    ),
-                    date_override=received_date or start_date,
-                )
-            ]
+            # A receipt timestamp cannot identify which meeting a date-less
+            # cancellation refers to. Keep it out of lifecycle suppression.
+            return []
     return [
         _meeting_to_digest_record(
             _semantic_meeting_from_date_hit(

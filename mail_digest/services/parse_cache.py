@@ -27,6 +27,8 @@ _RECORD_KEY_FIELDS = (
     "sender",
     "thread_id",
     "source_message_id",
+    "source_received_at",
+    "internal_date_ms",
 )
 
 
