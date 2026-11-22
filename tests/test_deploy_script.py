@@ -22,7 +22,10 @@ class DeployScriptTests(unittest.TestCase):
         apply=False,
         preflight_ok=True,
         preflight_output="",
-        fail_bootstrap_number=0,
+        bootstrap_failure_count=0,
+        bootstrap_fail_label="",
+        wait_label="",
+        wait_print_successes=0,
         broken_pip_shebang=False,
         python_check_failure="",
         quality_tools_fail=False,
@@ -61,20 +64,45 @@ class DeployScriptTests(unittest.TestCase):
         )
         launchctl_stub = fake_bin / "launchctl"
         launchctl_stub.write_text(
-            "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            "if [[ \"${1:-}\" == list ]]; then printf '%s\\n' \"$DEPLOY_TEST_LAUNCHD\"; exit 0; fi\n"
-            "printf '%s\\n' \"$*\" >> \"$DEPLOY_TEST_LAUNCHCTL_LOG\"\n"
-            "if [[ \"${1:-}\" == bootstrap ]]; then\n"
-            "  count=0\n"
-            "  if [[ -f \"${DEPLOY_TEST_LAUNCHCTL_LOG}.bootstrap_count\" ]]; then read -r count < \"${DEPLOY_TEST_LAUNCHCTL_LOG}.bootstrap_count\"; fi\n"
-            "  count=$((count + 1))\n"
-            "  printf '%s\\n' \"$count\" > \"${DEPLOY_TEST_LAUNCHCTL_LOG}.bootstrap_count\"\n"
-            "  if [[ \"$count\" == \"$DEPLOY_TEST_FAIL_BOOTSTRAP_NUMBER\" ]]; then exit 1; fi\n"
-            "fi\n"
-            "if [[ \"${1:-}\" == print ]]; then\n"
-            "  case \"$2\" in *com.ertugrul.mail.unread.summary|*com.ertugrul.mail.unread.listener) exit 0 ;; *) exit 1 ;; esac\n"
-            "fi\n",
+            """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == list ]]; then printf '%s\\n' "$DEPLOY_TEST_LAUNCHD"; exit 0; fi
+printf '%s\\n' "$*" >> "$DEPLOY_TEST_LAUNCHCTL_LOG"
+if [[ "${1:-}" == bootout ]]; then
+  if [[ -n "$DEPLOY_TEST_WAIT_LABEL" && "$2" == *"$DEPLOY_TEST_WAIT_LABEL" ]]; then
+    : > "${DEPLOY_TEST_LAUNCHCTL_LOG}.wait_pending"
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == bootstrap ]]; then
+  label="${3##*/}"
+  label="${label%.plist}"
+  count_file="${DEPLOY_TEST_LAUNCHCTL_LOG}.bootstrap_count.$label"
+  count=0
+  if [[ -f "$count_file" ]]; then read -r count < "$count_file"; fi
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "$count_file"
+  if [[ "$label" == "$DEPLOY_TEST_BOOTSTRAP_FAIL_LABEL" && "$count" -le "$DEPLOY_TEST_BOOTSTRAP_FAILURE_COUNT" ]]; then
+    printf '%s\\n' "$DEPLOY_TEST_BOOTSTRAP_ERROR" >&2
+    exit 5
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == print ]]; then
+  if [[ -n "$DEPLOY_TEST_WAIT_LABEL" && "$2" == *"$DEPLOY_TEST_WAIT_LABEL" && -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.wait_pending" ]]; then
+    count=0
+    count_file="${DEPLOY_TEST_LAUNCHCTL_LOG}.print_count"
+    if [[ -f "$count_file" ]]; then read -r count < "$count_file"; fi
+    count=$((count + 1))
+    printf '%s\\n' "$count" > "$count_file"
+    if [[ "$count" -le "$DEPLOY_TEST_WAIT_PRINT_SUCCESSES" ]]; then exit 0; fi
+    rm -f "${DEPLOY_TEST_LAUNCHCTL_LOG}.wait_pending"
+    exit 1
+  fi
+  if [[ "$DEPLOY_TEST_LAUNCHD" == *"${2##*/}"* ]]; then exit 0; fi
+  exit 1
+fi
+""",
             encoding="utf-8",
         )
         for name in ("python",):
@@ -122,7 +150,12 @@ class DeployScriptTests(unittest.TestCase):
                 "DEPLOY_TEST_LAUNCHD": launchd_output,
                 "DEPLOY_TEST_PREFLIGHT_EXIT": "0" if preflight_ok else "1",
                 "DEPLOY_TEST_PREFLIGHT_OUTPUT": preflight_output,
-                "DEPLOY_TEST_FAIL_BOOTSTRAP_NUMBER": str(fail_bootstrap_number),
+                "DEPLOY_TEST_BOOTSTRAP_FAILURE_COUNT": str(bootstrap_failure_count),
+                "DEPLOY_TEST_BOOTSTRAP_FAIL_LABEL": bootstrap_fail_label,
+                "DEPLOY_TEST_BOOTSTRAP_ERROR": "Bootstrap failed: 5: Input/output error",
+                "DEPLOY_TEST_WAIT_LABEL": wait_label,
+                "DEPLOY_TEST_WAIT_PRINT_SUCCESSES": str(wait_print_successes),
+                "DEPLOY_WAIT_STEP_SECONDS": "0",
                 "DEPLOY_TEST_PYTHON_CHECK_FAILURE": python_check_failure,
                 "DEPLOY_TEST_QUALITY_VERSION_FAIL": "true" if quality_tools_fail else "false",
                 "DEPLOY_TEST_GIT_LOG": str(git_log),
@@ -265,17 +298,73 @@ class DeployScriptTests(unittest.TestCase):
         self.assertFalse(any("scripts/install_launchd.py" in call for call in calls))
         self.assertFalse(launchctl_log.exists())
 
-    def test_apply_stops_on_second_bootstrap_and_reports_loaded_labels(self):
-        result, launchctl_log, _ = self.run_deploy(apply=True, fail_bootstrap_number=2)
+    def test_apply_waits_until_service_is_removed_before_bootstrap(self):
+        label = "com.ertugrul.mail.unread.summary"
+        result, launchctl_log, _ = self.run_deploy(
+            apply=True,
+            wait_label=label,
+            wait_print_successes=2,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+        bootout_index = next(
+            index for index, command in enumerate(commands)
+            if command.startswith("bootout ") and command.endswith(label)
+        )
+        bootstrap_index = next(
+            index for index, command in enumerate(commands)
+            if command.startswith("bootstrap ") and command.endswith(f"{label}.plist")
+        )
+        polls = [
+            command for command in commands[bootout_index + 1 : bootstrap_index]
+            if command.startswith("print ") and command.endswith(label)
+        ]
+        self.assertEqual(len(polls), 3)
+
+    def test_apply_retries_bootstrap_and_reports_first_error(self):
+        label = "com.ertugrul.mail.unread.summary"
+        result, launchctl_log, _ = self.run_deploy(
+            apply=True,
+            bootstrap_failure_count=1,
+            bootstrap_fail_label=label,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            f"{label}: deneme 1: Bootstrap failed: 5: Input/output error",
+            result.stderr,
+        )
+        commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+        bootstrap_commands = [
+            command for command in commands
+            if command.startswith("bootstrap ") and command.endswith(f"{label}.plist")
+        ]
+        self.assertEqual(len(bootstrap_commands), 2)
+
+    def test_apply_stops_after_three_bootstrap_failures_and_reports_loaded_labels(self):
+        label = "com.ertugrul.mail.unread.summary"
+        loaded_labels = "com.ertugrul.mail.meeting.reminder com.ertugrul.mail.unread.listener"
+        result, launchctl_log, _ = self.run_deploy(
+            apply=True,
+            launchd_output=loaded_labels,
+            bootstrap_failure_count=3,
+            bootstrap_fail_label=label,
+        )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Başarısız label: com.ertugrul.mail.meeting.reminder", result.stderr)
-        self.assertIn("com.ertugrul.mail.unread.summary", result.stderr)
+        self.assertIn("Başarısız label: com.ertugrul.mail.unread.summary", result.stderr)
+        self.assertIn("deneme 1: Bootstrap failed: 5: Input/output error", result.stderr)
+        self.assertIn("deneme 2: Bootstrap failed: 5: Input/output error", result.stderr)
+        self.assertIn("deneme 3: Bootstrap failed: 5: Input/output error", result.stderr)
+        self.assertIn("com.ertugrul.mail.meeting.reminder", result.stderr)
         self.assertIn("com.ertugrul.mail.unread.listener", result.stderr)
         commands = launchctl_log.read_text(encoding="utf-8").splitlines()
-        bootstrap_commands = [command for command in commands if command.startswith("bootstrap ")]
-        self.assertEqual(len(bootstrap_commands), 2)
-        self.assertFalse(any("listener.plist" in command for command in bootstrap_commands))
+        bootstrap_commands = [
+            command for command in commands
+            if command.startswith("bootstrap ") and command.endswith(f"{label}.plist")
+        ]
+        self.assertEqual(len(bootstrap_commands), 3)
 
 
 if __name__ == "__main__":
