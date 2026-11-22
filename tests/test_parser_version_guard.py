@@ -60,7 +60,7 @@ class ParserVersionGuardTests(unittest.TestCase):
         expected_hash = PARSER_OUTPUT_HASHES.get(PARSER_VERSION)
         self.assertIsNotNone(
             expected_hash,
-            "Add the canonical output hash for this PARSER_VERSION.",
+            "Parser çıktısı değişti; PARSER_VERSION'ı artırın ve hash'i güncelleyin.",
         )
         actual_hash = hashlib.sha256(
             _canonical_parser_output().encode("utf-8")
@@ -68,7 +68,7 @@ class ParserVersionGuardTests(unittest.TestCase):
         self.assertEqual(
             actual_hash,
             expected_hash,
-            "Parser output changed; increase PARSER_VERSION and update the hash.",
+            "Parser çıktısı değişti; PARSER_VERSION'ı artırın ve hash'i güncelleyin.",
         )
 
 

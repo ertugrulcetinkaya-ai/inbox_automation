@@ -132,8 +132,13 @@ class DocumentationContractTests(unittest.TestCase):
 
         self.assertEqual(set(values), _code_environment_names())
         self.assertEqual(values["MAIL_DIGEST_TARGET_EMAIL"], "user@example.com")
+        self.assertTrue(
+            set(values.values()) <= {"", "gmail", "user@example.com"},
+            "The example may contain only blank or synthetic values.",
+        )
         self.assertEqual(values["TELEGRAM_BOT_TOKEN"], "")
         self.assertEqual(values["TELEGRAM_CHAT_ID"], "")
+        self.assertEqual(values["TELEGRAM_ALLOWED_USER_ID"], "")
 
     def test_troubleshooting_runbook_has_required_sections_and_actions(self):
         readme = _readme_text()
