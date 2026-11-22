@@ -159,6 +159,24 @@ class HealthStatusTests(unittest.TestCase):
         self.assertIn("Gmail token: dosya yok", report)
         self.assertIn("token dosyası yok", report)
 
+    def test_target_account_status_never_displays_configured_address(self):
+        with patch.dict(os.environ, {"MAIL_DIGEST_TARGET_EMAIL": "user@example.com"}):
+            report = build_status_report(now=self.now)
+
+        self.assertIn("Hedef hesap: yapılandırıldı", report)
+        self.assertNotIn("user@example.com", report)
+        self.assertNotIn("⚠️ Hedef hesap yapılandırılmadı", report)
+
+    def test_missing_target_account_is_reported_and_warned_without_path(self):
+        with patch.dict(os.environ):
+            os.environ.pop("MAIL_DIGEST_TARGET_EMAIL", None)
+            os.environ["MAIL_DIGEST_TARGET_ENV_FILE"] = str(self.root / "missing-target.env")
+            report = build_status_report(now=self.now)
+
+        self.assertIn("Hedef hesap: yapılandırılmadı (hedef env dosyası yok)", report)
+        self.assertIn("⚠️ Hedef hesap yapılandırılmadı: hedef env dosyası yok", report)
+        self.assertNotIn(str(self.root), report)
+
     def test_manual_daily_success_does_not_hide_missing_scheduled_digest(self):
         self.write_status(daily_success=self.now)
         payload = json.loads(self.status_path.read_text(encoding="utf-8"))
