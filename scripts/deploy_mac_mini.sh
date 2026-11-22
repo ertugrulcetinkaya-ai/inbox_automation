@@ -122,12 +122,6 @@ if grep -qi hermes <<<"$LAUNCHD_JOBS"; then
     exit 1
 fi
 
-INSTALL_ARGS=(--mail-source gmail --include-listener)
-if [[ "$APPLY" == true ]]; then
-    INSTALL_ARGS+=(--install)
-fi
-"$VENV_PYTHON" scripts/install_launchd.py "${INSTALL_ARGS[@]}"
-
 DOMAIN="gui/$(id -u)"
 LABELS=(
     com.ertugrul.mail.unread.summary
@@ -140,20 +134,50 @@ PLISTS=(
     "$HOME/Library/LaunchAgents/com.ertugrul.mail.unread.listener.plist"
 )
 
+ROLLBACK_DIR=""
+PREVIOUSLY_LOADED_LABELS=""
+if [[ "$APPLY" == true ]]; then
+    backup_timestamp="$(date +%Y%m%d_%H%M%S)"
+    BACKUP_ROOT="$HOME/.hermes_local_automation/deploy-backups"
+    mkdir -p "$BACKUP_ROOT"
+    chmod 700 "$BACKUP_ROOT"
+    ROLLBACK_DIR="$(mktemp -d "$BACKUP_ROOT/inbox_launchd_backup.${backup_timestamp}.XXXXXX")"
+    chmod 700 "$ROLLBACK_DIR"
+    for index in "${!LABELS[@]}"; do
+        label="${LABELS[$index]}"
+        plist="${PLISTS[$index]}"
+        if [[ -f "$plist" ]]; then
+            cp -p "$plist" "$ROLLBACK_DIR/$label.plist"
+        fi
+        if launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then
+            PREVIOUSLY_LOADED_LABELS+="$label"$'\n'
+        fi
+    done
+    printf '%s' "$PREVIOUSLY_LOADED_LABELS" >"$ROLLBACK_DIR/loaded_labels"
+    chmod 600 "$ROLLBACK_DIR/loaded_labels"
+    printf 'Launchd rollback backup created: %s\n' "$ROLLBACK_DIR"
+fi
+
+INSTALL_ARGS=(--mail-source gmail --include-listener)
+if [[ "$APPLY" == true ]]; then
+    INSTALL_ARGS+=(--install)
+fi
+"$VENV_PYTHON" scripts/install_launchd.py "${INSTALL_ARGS[@]}"
+
 if [[ "$APPLY" == true ]]; then
     report_launchd_failure() {
         local failed_label="$1"
-        local loaded_labels=()
         local label
+        local loaded_text='yok'
         for label in "${LABELS[@]}"; do
             if launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then
-                loaded_labels+=("$label")
+                if [[ "$loaded_text" == 'yok' ]]; then
+                    loaded_text="$label"
+                else
+                    loaded_text+=" $label"
+                fi
             fi
         done
-        local loaded_text='yok'
-        if [[ ${#loaded_labels[@]} -gt 0 ]]; then
-            loaded_text="${loaded_labels[*]}"
-        fi
         printf 'Yüklü launchd label’ları: %s\n' "$loaded_text" >&2
         printf 'Başarısız label: %s\n' "$failed_label" >&2
     }
@@ -173,6 +197,96 @@ if [[ "$APPLY" == true ]]; then
         return 1
     }
 
+    bootstrap_with_retries() {
+        local service_label="$1"
+        local plist_path="$2"
+        local bootstrap_attempt
+        local bootstrap_error
+        local bootstrap_succeeded=false
+
+        for bootstrap_attempt in 1 2 3; do
+            if bootstrap_error="$(launchctl bootstrap "$DOMAIN" "$plist_path" 2>&1 >/dev/null)"; then
+                bootstrap_succeeded=true
+                break
+            fi
+            printf '%s: deneme %s: %s\n' "$service_label" "$bootstrap_attempt" "$bootstrap_error" >&2
+            if [[ "$bootstrap_attempt" -lt 3 ]]; then
+                sleep "$((DEPLOY_WAIT_STEP_SECONDS * 3))"
+            fi
+        done
+        [[ "$bootstrap_succeeded" == true ]]
+    }
+
+    rollback_launchd() {
+        local index
+        local service_label
+        local plist_path
+        local backup_path
+        local restore_ok=true
+
+        printf 'Rollback: stopping newly loaded labels.\n' >&2
+        for service_label in "${LABELS[@]}"; do
+            launchctl bootout "$DOMAIN/$service_label" >/dev/null 2>&1 || true
+            if wait_until_unloaded "$DOMAIN/$service_label"; then
+                printf 'Rollback: unloaded %s.\n' "$service_label" >&2
+            else
+                printf 'Rollback: unload wait failed for %s.\n' "$service_label" >&2
+                restore_ok=false
+            fi
+        done
+
+        for index in "${!LABELS[@]}"; do
+            service_label="${LABELS[$index]}"
+            plist_path="${PLISTS[$index]}"
+            backup_path="$ROLLBACK_DIR/$service_label.plist"
+            if [[ -f "$backup_path" ]]; then
+                if cp -p "$backup_path" "$plist_path"; then
+                    printf 'Rollback: restored plist for %s.\n' "$service_label" >&2
+                else
+                    printf 'Rollback: plist restore failed for %s.\n' "$service_label" >&2
+                    restore_ok=false
+                fi
+            elif rm -f "$plist_path"; then
+                printf 'Rollback: removed new plist for %s.\n' "$service_label" >&2
+            else
+                printf 'Rollback: plist removal failed for %s.\n' "$service_label" >&2
+                restore_ok=false
+            fi
+        done
+
+        while IFS= read -r service_label; do
+            [[ -n "$service_label" ]] || continue
+            for index in "${!LABELS[@]}"; do
+                if [[ "${LABELS[$index]}" == "$service_label" ]]; then
+                    plist_path="${PLISTS[$index]}"
+                    break
+                fi
+            done
+            if [[ ! -f "$plist_path" ]]; then
+                printf 'Rollback: previous plist missing for %s.\n' "$service_label" >&2
+                restore_ok=false
+                continue
+            fi
+            if ! wait_until_unloaded "$DOMAIN/$service_label"; then
+                printf 'Rollback: unload wait failed before bootstrap for %s.\n' "$service_label" >&2
+                restore_ok=false
+                continue
+            fi
+            if bootstrap_with_retries "$service_label" "$plist_path"; then
+                printf 'Rollback: bootstrapped previous service %s.\n' "$service_label" >&2
+            else
+                printf 'Rollback: bootstrap failed for previous service %s.\n' "$service_label" >&2
+                restore_ok=false
+            fi
+        done <<<"$PREVIOUSLY_LOADED_LABELS"
+
+        if [[ "$restore_ok" == true ]]; then
+            printf 'Rollback completed; previous loaded services were restored.\n' >&2
+        else
+            printf 'Rollback completed with errors; manual launchd recovery may be required.\n' >&2
+        fi
+    }
+
     for index in "${!LABELS[@]}"; do
         label="${LABELS[$index]}"
         plist="${PLISTS[$index]}"
@@ -180,23 +294,13 @@ if [[ "$APPLY" == true ]]; then
 
         if ! wait_until_unloaded "$DOMAIN/$label"; then
             report_launchd_failure "$label"
+            rollback_launchd
             exit 1
         fi
 
-        bootstrap_succeeded=false
-        for bootstrap_attempt in 1 2 3; do
-            # Capture stderr only; launchctl stdout is discarded.
-            if bootstrap_error="$(launchctl bootstrap "$DOMAIN" "$plist" 2>&1 >/dev/null)"; then
-                bootstrap_succeeded=true
-                break
-            fi
-            printf '%s: deneme %s: %s\n' "$label" "$bootstrap_attempt" "$bootstrap_error" >&2
-            if [[ "$bootstrap_attempt" -lt 3 ]]; then
-                sleep "$((DEPLOY_WAIT_STEP_SECONDS * 3))"
-            fi
-        done
-        if [[ "$bootstrap_succeeded" != true ]]; then
+        if ! bootstrap_with_retries "$label" "$plist"; then
             report_launchd_failure "$label"
+            rollback_launchd
             exit 1
         fi
     done

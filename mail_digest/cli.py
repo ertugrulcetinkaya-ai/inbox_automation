@@ -19,7 +19,7 @@ from .services.meeting_service import (
 )
 from .services.lock import DigestAlreadyRunning, digest_lock
 from .services.health import build_status_report
-from .services.log_rotation import CLI_LOG_NAMES, rotate_logs
+from .services.log_rotation import log_names_for_mode, rotate_logs
 from .services.reminder_state import (
     load_last_successful_reminder_scan,
     load_sent_reminders,
@@ -43,7 +43,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
     try:
         records = fetch_mail()
     except MailSourceConfigurationError as exc:
-        log(f"Mail source configuration error: {exc}")
+        log(f"Mail source configuration error ({exc.__class__.__name__})")
         log("DONE meeting digest (FAILED)")
         return 1
     if records is None:
@@ -61,7 +61,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
             lead_minutes = reminder_minutes()
             window_minutes = reminder_window_minutes()
         except ValueError as exc:
-            log(f"Reminder configuration error: {exc}")
+            log(f"Reminder configuration error ({exc.__class__.__name__})")
             log("DONE meeting digest (FAILED)")
             return 1
         due = due_reminder_meetings(
@@ -80,7 +80,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
                 try:
                     mark_reminder_scan_succeeded(scan_at=now)
                 except OSError as exc:
-                    log(f"Reminder scan state could not be saved: {exc}")
+                    log(f"Reminder scan state could not be saved ({exc.__class__.__name__})")
                     log("DONE meeting digest (FAILED)")
                     return 1
             log("No unsent meeting reminders are due")
@@ -129,7 +129,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
                     last_successful_scan=now,
                 )
             except OSError as exc:
-                log(f"Reminder state could not be saved: {exc}")
+                log(f"Reminder state could not be saved ({exc.__class__.__name__})")
                 log("DONE meeting digest (FAILED)")
                 return 1
 
@@ -153,6 +153,10 @@ def run_digest(
     lock_wait = daily_lock_wait_seconds() if scheduled else wait_seconds
     try:
         with digest_lock(wait_seconds=lock_wait):
+            rotate_logs(
+                PROJECT_ROOT / "logs",
+                names=log_names_for_mode(status_mode),
+            )
             if not dry_run:
                 record_run_started(status_mode)
             kwargs = {"upcoming": upcoming, "dry_run": dry_run}
@@ -185,7 +189,6 @@ def run_digest(
 
 
 def main():
-    rotate_logs(PROJECT_ROOT / "logs", names=CLI_LOG_NAMES)
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fetch and format but do not send")
     parser.add_argument(
@@ -229,7 +232,7 @@ def main():
         try:
             daily_lock_wait_seconds()
         except ValueError as exc:
-            log(f"Scheduled daily lock configuration error: {exc}")
+            log(f"Scheduled daily lock configuration error ({exc.__class__.__name__})")
             return 1
 
     preflight_run = args.upcoming and args.dry_run
@@ -238,7 +241,7 @@ def main():
         try:
             preflight_wait_seconds = preflight_lock_wait_seconds()
         except ValueError as exc:
-            log(f"Deploy preflight lock configuration error: {exc}")
+            log(f"Deploy preflight lock configuration error ({exc.__class__.__name__})")
             return 1
 
     if args.status:

@@ -12,16 +12,20 @@ from zoneinfo import ZoneInfo
 
 from ..config import (
     LOCAL_TIMEZONE_NAME,
+    TargetEmailConfigurationError,
     daily_lock_wait_seconds,
     preflight_lock_wait_seconds,
     gmail_batch_pause_seconds,
     gmail_batch_size,
+    gmail_retry_after_max_seconds,
+    gmail_retry_total_wait_seconds,
     gmail_cache_file,
     gmail_token_file,
     local_now,
     reminder_minutes,
     reminder_state_file,
     reminder_window_minutes,
+    target_email,
 )
 from ..sources import selected_source_name
 from .reminder_state import load_last_successful_reminder_scan
@@ -145,6 +149,32 @@ def _format_time(value):
     return value.strftime("%Y-%m-%d %H:%M") if value is not None else "yok"
 
 
+def _target_account_status():
+    try:
+        target_email()
+    except TargetEmailConfigurationError as exc:
+        detail = str(exc).casefold()
+        if "missing" in detail:
+            reason = "hedef env dosyası yok"
+        elif "0600" in detail:
+            reason = "hedef env dosyasının izni 0600 değil"
+        elif "valid email address" in detail:
+            reason = "hedef adres biçimi geçersiz"
+        elif "exactly one" in detail:
+            reason = "hedef env dosyasında tek hedef satırı gerekli"
+        elif "cannot be inspected" in detail:
+            reason = "hedef env dosyası incelenemiyor"
+        elif "cannot be read" in detail:
+            reason = "hedef env dosyası okunamıyor"
+        else:
+            reason = "hedef hesap yapılandırması geçersiz"
+        return f"Hedef hesap: yapılandırılmadı ({reason})", False, reason
+    except Exception as exc:
+        reason = f"doğrulanamadı ({exc.__class__.__name__})"
+        return f"Hedef hesap: yapılandırılmadı ({reason})", False, reason
+    return "Hedef hesap: yapılandırıldı", True, None
+
+
 def _daily_deadline():
     value = os.environ.get("MAIL_DIGEST_DAILY_DEADLINE", "08:15")
     if (
@@ -200,9 +230,11 @@ def build_status_report(now=None):
 
     now = _local_naive(now or local_now())
     modes, status_file_state = _read_status()
+    target_status, target_configured, target_reason = _target_account_status()
     lines = [
         f"Durum raporu — {now:%Y-%m-%d %H:%M}",
         f"Mail kaynağı: {selected_source_name()}",
+        target_status,
         f"Çalışma kaydı: {status_file_state}",
         "Son çalışmalar:",
     ]
@@ -260,11 +292,15 @@ def build_status_report(now=None):
     lines.append(f"Son hatırlatma taraması: {_format_time(reminder_scan)}")
 
     warnings = []
+    if not target_configured:
+        warnings.append(f"⚠️ Hedef hesap yapılandırılmadı: {target_reason}")
     if deadline_invalid:
         warnings.append("⚠️ Yapılandırma hatası: MAIL_DIGEST_DAILY_DEADLINE")
     for variable_name, read_setting in (
         ("GMAIL_BATCH_SIZE", gmail_batch_size),
         ("GMAIL_BATCH_PAUSE_SECONDS", gmail_batch_pause_seconds),
+        ("GMAIL_RETRY_AFTER_MAX_SECONDS", gmail_retry_after_max_seconds),
+        ("GMAIL_RETRY_TOTAL_WAIT_SECONDS", gmail_retry_total_wait_seconds),
         ("MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS", daily_lock_wait_seconds),
         ("MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS", preflight_lock_wait_seconds),
         ("MEETING_REMINDER_MINUTES", reminder_minutes),

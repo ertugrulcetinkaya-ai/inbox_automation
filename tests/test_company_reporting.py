@@ -7,7 +7,7 @@ import sys
 import types
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from mail_digest.integrations import company_reporting
 
@@ -28,19 +28,33 @@ class CompanyReportingIntegrationTests(unittest.TestCase):
     def test_report_command_works_when_optional_package_is_available(self):
         router = types.ModuleType("app.company_reports.live_command_router")
         error_type = type("CompanyReportCommandError", (Exception,), {})
-        dispatch = Mock(return_value=SimpleNamespace(response="Report output", matched=True))
+        dispatch = AsyncMock(
+            return_value=SimpleNamespace(
+                response="Report output",
+                matched=True,
+                ok=True,
+                suppress_reply=False,
+                error_code=None,
+            )
+        )
         router.CompanyReportCommandError = error_type
-        router.dispatch_company_report_command = dispatch
+        router.dispatch_company_report_command_async = dispatch
 
         with patch.dict(sys.modules, fake_package_modules(
             "app.company_reports.live_command_router", router
         )):
-            result = company_reporting.run_company_report_command("/servis")
+            result = company_reporting.run_company_report_command("/servis", send=False)
 
-        dispatch.assert_called_once_with("/servis", send=True)
+        dispatch.assert_awaited_once_with("/servis", send=False)
         self.assertEqual(
             result,
-            {"ok": True, "response": "Report output", "matched": True},
+            {
+                "ok": True,
+                "response": "Report output",
+                "matched": True,
+                "suppress_reply": False,
+                "error_code": None,
+            },
         )
 
     def test_report_command_keeps_unavailable_message_when_package_is_missing(self):
@@ -54,21 +68,78 @@ class CompanyReportingIntegrationTests(unittest.TestCase):
         with patch("builtins.__import__", side_effect=missing_reporting):
             result = company_reporting.run_company_report_command("/fatura")
 
-        self.assertEqual(result, company_reporting.REPORT_SERVICE_UNAVAILABLE)
+        self.assertEqual(
+            result,
+            {
+                "ok": False,
+                "response": company_reporting.REPORT_SERVICE_UNAVAILABLE,
+                "matched": False,
+                "suppress_reply": False,
+                "error_code": None,
+            },
+        )
 
     def test_report_command_formats_known_command_error(self):
         router = types.ModuleType("app.company_reports.live_command_router")
         error_type = type("CompanyReportCommandError", (Exception,), {})
-        dispatch = Mock(side_effect=error_type("fixture report error"))
+        dispatch = AsyncMock(side_effect=error_type("fixture report error"))
         router.CompanyReportCommandError = error_type
-        router.dispatch_company_report_command = dispatch
+        router.dispatch_company_report_command_async = dispatch
 
         with patch.dict(sys.modules, fake_package_modules(
             "app.company_reports.live_command_router", router
         )):
             result = company_reporting.run_company_report_command("/servis")
 
-        self.assertEqual(result, "Rapor üretilemedi: fixture report error")
+        self.assertEqual(
+            result,
+            {
+                "ok": False,
+                "response": "Rapor üretilemedi: fixture report error",
+                "matched": True,
+                "suppress_reply": False,
+                "error_code": None,
+            },
+        )
+        dispatch.assert_awaited_once_with("/servis", send=True)
+
+    def test_report_command_returns_dictionary_for_unexpected_error_without_text(self):
+        router = types.ModuleType("app.company_reports.live_command_router")
+        error_type = type("CompanyReportCommandError", (Exception,), {})
+        dispatch = AsyncMock(side_effect=RuntimeError("private report payload"))
+        router.CompanyReportCommandError = error_type
+        router.dispatch_company_report_command_async = dispatch
+
+        with patch.dict(sys.modules, fake_package_modules(
+            "app.company_reports.live_command_router", router
+        )):
+            result = company_reporting.run_company_report_command("/servis")
+
+        self.assertEqual(
+            result,
+            {
+                "ok": False,
+                "response": "Rapor üretilemedi: RuntimeError",
+                "matched": True,
+                "suppress_reply": False,
+                "error_code": None,
+            },
+        )
+        self.assertNotIn("private report payload", str(result))
+
+    def test_registered_report_command_is_checked_without_dispatch(self):
+        router = types.ModuleType("app.company_reports.live_command_router")
+        parse = Mock(side_effect=lambda text: object() if text == "/stok" else None)
+        router.parse_company_report_command = parse
+
+        with patch.dict(sys.modules, fake_package_modules(
+            "app.company_reports.live_command_router", router
+        )):
+            self.assertTrue(company_reporting.is_registered_company_report_command("/stok"))
+            self.assertFalse(company_reporting.is_registered_company_report_command("/unknown"))
+
+        parse.assert_any_call("/stok")
+        parse.assert_any_call("/unknown")
 
     def test_session_status_reports_ready_and_unavailable_states(self):
         worker_module = types.ModuleType("app.company_reports.portal_browser_worker")

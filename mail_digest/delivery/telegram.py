@@ -89,8 +89,10 @@ def _send_chunk(token, chat_id, chunk, chunk_number, chunk_count, sleep=time.sle
             if retryable and attempt < TELEGRAM_MAX_ATTEMPTS:
                 sleep(_retry_delay(None, attempt))
                 continue
-            safe_error = str(exc).replace(token, "[REDACTED]")
-            log(f"Network error sending chunk {chunk_number}/{chunk_count}: {safe_error}")
+            log(
+                f"Network error sending chunk {chunk_number}/{chunk_count} "
+                f"({exc.__class__.__name__})"
+            )
             return False
 
         status = getattr(response, "status_code", None)

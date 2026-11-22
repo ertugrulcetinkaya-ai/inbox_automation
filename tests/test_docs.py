@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
+import sys
 import unittest
 from dataclasses import fields
 from pathlib import Path
@@ -116,6 +118,57 @@ class DocumentationContractTests(unittest.TestCase):
         code_names = _code_environment_names()
 
         self.assertEqual(documented, code_names)
+
+    def test_env_example_covers_supported_names_without_real_secrets(self):
+        env_example = PROJECT_ROOT / ".env.example"
+        values = {}
+        for line in env_example.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            name, separator, value = stripped.partition("=")
+            self.assertTrue(separator, line)
+            values[name] = value
+
+        self.assertEqual(set(values), _code_environment_names())
+        self.assertEqual(values["MAIL_DIGEST_TARGET_EMAIL"], "user@example.com")
+        self.assertTrue(
+            set(values.values()) <= {"", "gmail", "user@example.com"},
+            "The example may contain only blank or synthetic values.",
+        )
+        self.assertEqual(values["TELEGRAM_BOT_TOKEN"], "")
+        self.assertEqual(values["TELEGRAM_CHAT_ID"], "")
+        self.assertEqual(values["TELEGRAM_ALLOWED_USER_ID"], "")
+
+    def test_troubleshooting_runbook_has_required_sections_and_actions(self):
+        readme = _readme_text()
+        for heading in (
+            "## Sorun giderme",
+            "### 08:00 özeti gelmedi",
+            "### Gmail token'ı geçersiz veya geçici hata",
+            "### Telegram 409",
+            "### Bozuk Gmail veya parse cache'i",
+            "### Logda token görünürse",
+            "### Log konumu",
+        ):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, readme)
+        self.assertIn("skipped_lock", readme)
+        self.assertIn("BotFather", readme)
+        self.assertIn("aynı inode'a yerinde yaz", readme)
+
+    def test_launchd_listener_help_describes_single_poller_ownership(self):
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / "install_launchd.py"), "--help"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no other poller or webhook is active", result.stdout)
+        self.assertNotIn("Hermes Gateway", result.stdout)
 
 
 if __name__ == "__main__":

@@ -2,8 +2,8 @@
 """Render this repository's launchd templates for the current Mac user.
 
 The script writes plist files to ~/Library/LaunchAgents but deliberately does
-not load or restart them. The Company Reporting Hermes Gateway must remain the
-only Telegram polling process when the standalone listener is not requested.
+not load or restart them. Enable the standalone listener only when it is the
+sole Telegram poller; do not run another poller or webhook for the same bot.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def main() -> int:
     parser.add_argument(
         "--include-listener",
         action="store_true",
-        help="Also install the standalone Telegram listener (avoid when Hermes Gateway owns the bot)",
+        help="Install the standalone Telegram listener; use only when no other poller or webhook is active",
     )
     args = parser.parse_args()
     if args.reminder_minutes <= 0:

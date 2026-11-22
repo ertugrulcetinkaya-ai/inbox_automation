@@ -27,9 +27,13 @@ def fetch_mail():
         OSError,
         sqlite3.Error,
     ) as exc:
+        error_detail = type(exc).__name__
+        if isinstance(exc, GmailApiError) and exc.http_status is not None:
+            reason = f" {exc.reason}" if exc.reason else ""
+            error_detail = f"{error_detail}: HTTP {exc.http_status}{reason}"
         log(
             "Gmail sync failed "
-            f"({type(exc).__name__}: {exc}); run scripts/gmail_auth.py "
+            f"({error_detail}); run scripts/gmail_auth.py "
             "if authorization is required"
         )
         return None

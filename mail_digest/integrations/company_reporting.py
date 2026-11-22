@@ -8,20 +8,67 @@ REPORT_SERVICE_UNAVAILABLE = (
 )
 
 
-def run_company_report_command(text):
+def is_registered_company_report_command(text):
+    try:
+        from app.company_reports.live_command_router import (
+            parse_company_report_command,
+        )
+    except ImportError:
+        return False
+
+    try:
+        return parse_company_report_command(text) is not None
+    except Exception:
+        return False
+
+
+def run_company_report_command(text, *, send=True):
+    unavailable = {
+        "ok": False,
+        "response": REPORT_SERVICE_UNAVAILABLE,
+        "matched": False,
+        "suppress_reply": False,
+        "error_code": None,
+    }
     try:
         from app.company_reports.live_command_router import (
             CompanyReportCommandError,
-            dispatch_company_report_command,
+            dispatch_company_report_command_async,
         )
     except ImportError:
-        return REPORT_SERVICE_UNAVAILABLE
+        return unavailable
 
     try:
-        result = dispatch_company_report_command(text, send=True)
+        result = asyncio.run(dispatch_company_report_command_async(text, send=send))
     except CompanyReportCommandError as exc:
-        return f"Rapor üretilemedi: {str(exc)[:200] or 'unknown error'}"
-    return {"ok": True, "response": result.response, "matched": result.matched}
+        notification_attempted = bool(getattr(exc, "notification_attempted", False))
+        return {
+            "ok": False,
+            "response": None
+            if send and notification_attempted
+            else f"Rapor üretilemedi: {str(exc)[:200] or 'unknown error'}",
+            "matched": True,
+            "suppress_reply": send and notification_attempted,
+            "error_code": getattr(exc, "error_code", None),
+        }
+    except Exception as exc:
+        notification_attempted = bool(getattr(exc, "notification_attempted", False))
+        return {
+            "ok": False,
+            "response": None
+            if send and notification_attempted
+            else f"Rapor üretilemedi: {exc.__class__.__name__}",
+            "matched": True,
+            "suppress_reply": send and notification_attempted,
+            "error_code": getattr(exc, "error_code", None),
+        }
+    return {
+        "ok": bool(getattr(result, "ok", False)),
+        "response": getattr(result, "response", None),
+        "matched": bool(getattr(result, "matched", False)),
+        "suppress_reply": bool(getattr(result, "suppress_reply", False)),
+        "error_code": getattr(result, "error_code", None),
+    }
 
 
 def run_report_session_status():
