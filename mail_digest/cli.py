@@ -43,7 +43,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
     try:
         records = fetch_mail()
     except MailSourceConfigurationError as exc:
-        log(f"Mail source configuration error: {exc}")
+        log(f"Mail source configuration error ({exc.__class__.__name__})")
         log("DONE meeting digest (FAILED)")
         return 1
     if records is None:
@@ -61,7 +61,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
             lead_minutes = reminder_minutes()
             window_minutes = reminder_window_minutes()
         except ValueError as exc:
-            log(f"Reminder configuration error: {exc}")
+            log(f"Reminder configuration error ({exc.__class__.__name__})")
             log("DONE meeting digest (FAILED)")
             return 1
         due = due_reminder_meetings(
@@ -80,7 +80,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
                 try:
                     mark_reminder_scan_succeeded(scan_at=now)
                 except OSError as exc:
-                    log(f"Reminder scan state could not be saved: {exc}")
+                    log(f"Reminder scan state could not be saved ({exc.__class__.__name__})")
                     log("DONE meeting digest (FAILED)")
                     return 1
             log("No unsent meeting reminders are due")
@@ -129,7 +129,7 @@ def _run_digest(upcoming=False, dry_run=False, mode=None):
                     last_successful_scan=now,
                 )
             except OSError as exc:
-                log(f"Reminder state could not be saved: {exc}")
+                log(f"Reminder state could not be saved ({exc.__class__.__name__})")
                 log("DONE meeting digest (FAILED)")
                 return 1
 
@@ -229,7 +229,7 @@ def main():
         try:
             daily_lock_wait_seconds()
         except ValueError as exc:
-            log(f"Scheduled daily lock configuration error: {exc}")
+            log(f"Scheduled daily lock configuration error ({exc.__class__.__name__})")
             return 1
 
     preflight_run = args.upcoming and args.dry_run
@@ -238,7 +238,7 @@ def main():
         try:
             preflight_wait_seconds = preflight_lock_wait_seconds()
         except ValueError as exc:
-            log(f"Deploy preflight lock configuration error: {exc}")
+            log(f"Deploy preflight lock configuration error ({exc.__class__.__name__})")
             return 1
 
     if args.status:

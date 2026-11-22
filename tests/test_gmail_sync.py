@@ -725,7 +725,7 @@ class GmailSyncTests(unittest.TestCase):
         )
         logger.assert_called_once_with(
             "Retention upgrade full sync failed "
-            "(GmailApiError: Gmail API request failed (HTTP 403)); "
+            "(GmailApiError); "
             "continuing with incremental sync"
         )
 

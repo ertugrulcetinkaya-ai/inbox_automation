@@ -275,7 +275,7 @@ class GmailSynchronizer:
                     self.store.set_retention_upgrade_last_attempt_ms(now_ms)
                     log(
                         "Retention upgrade full sync failed "
-                        f"({type(exc).__name__}: {exc}); continuing with incremental sync"
+                        f"({type(exc).__name__}); continuing with incremental sync"
                     )
                     self.incremental_sync(checkpoint)
                 else:
@@ -285,7 +285,7 @@ class GmailSynchronizer:
                     except (GmailApiError, GmailSyncError) as exc:
                         log(
                             "Retention upgrade full sync failed "
-                            f"({type(exc).__name__}: {exc}); continuing with incremental sync"
+                            f"({type(exc).__name__}); continuing with incremental sync"
                         )
                         self.incremental_sync(checkpoint)
         else:

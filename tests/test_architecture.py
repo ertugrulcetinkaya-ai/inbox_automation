@@ -14,6 +14,134 @@ from mail_digest.parsing.meeting_parser import extract_meetings
 
 
 class ArchitectureTests(unittest.TestCase):
+    def test_exception_text_is_redacted_before_print_or_log(self):
+        project_root = Path(main.__file__).parent
+        source_paths = [project_root / "telegram_listener.py"]
+        source_paths.extend((project_root / "mail_digest").rglob("*.py"))
+
+        def is_exception_class_expression(node, exception_names):
+            if not isinstance(node, ast.Attribute) or node.attr != "__name__":
+                return False
+            value = node.value
+            if isinstance(value, ast.Attribute) and value.attr == "__class__":
+                return isinstance(value.value, ast.Name) and value.value.id in exception_names
+            return (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "type"
+                and len(value.args) == 1
+                and isinstance(value.args[0], ast.Name)
+                and value.args[0].id in exception_names
+            )
+
+        def is_redacted_expression(node, exception_names):
+            return (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "replace"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and any(
+                    token_part in node.args[0].id.casefold()
+                    for token_part in ("token", "secret")
+                )
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "[REDACTED]"
+                and any(
+                    isinstance(child, ast.Name) and child.id in exception_names
+                    for child in ast.walk(node.func.value)
+                )
+            )
+
+        def is_safe_exception_metadata(node, exception_names):
+            return (
+                isinstance(node, ast.Attribute)
+                and node.attr in {"http_status", "reason"}
+                and isinstance(node.value, ast.Name)
+                and node.value.id in exception_names
+            )
+
+        def has_unredacted_exception_text(node, exception_names, unsafe_variables):
+            if isinstance(node, ast.Name) and (
+                node.id in exception_names or node.id in unsafe_variables
+            ):
+                return True
+            if is_exception_class_expression(node, exception_names):
+                return False
+            if is_redacted_expression(node, exception_names):
+                return False
+            if is_safe_exception_metadata(node, exception_names):
+                return False
+            return any(
+                has_unredacted_exception_text(child, exception_names, unsafe_variables)
+                for child in ast.iter_child_nodes(node)
+            )
+
+        def assigned_names(node):
+            if isinstance(node, ast.Name):
+                return {node.id}
+            if isinstance(node, (ast.Tuple, ast.List)):
+                return set().union(*(assigned_names(item) for item in node.elts))
+            return set()
+
+        violations = []
+        for source_path in source_paths:
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            exception_names = {
+                handler.name
+                for handler in ast.walk(tree)
+                if isinstance(handler, ast.ExceptHandler) and handler.name
+            }
+            unsafe_variables = set()
+            changed = True
+            while changed:
+                changed = False
+                for assignment in ast.walk(tree):
+                    if isinstance(assignment, ast.Assign):
+                        targets = set().union(
+                            *(assigned_names(target) for target in assignment.targets)
+                        )
+                        value = assignment.value
+                    elif isinstance(assignment, ast.AnnAssign):
+                        targets = assigned_names(assignment.target)
+                        value = assignment.value
+                    else:
+                        continue
+                    if value is None or not has_unredacted_exception_text(
+                        value, exception_names, unsafe_variables
+                    ):
+                        continue
+                    new_names = targets - unsafe_variables
+                    if new_names:
+                        unsafe_variables.update(new_names)
+                        changed = True
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                function_name = (
+                    node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+                )
+                if function_name not in {
+                    "print", "log", "debug", "info", "warning", "error", "exception"
+                }:
+                    continue
+                if any(
+                    has_unredacted_exception_text(
+                        argument, exception_names, unsafe_variables
+                    )
+                    for argument in (*node.args, *(keyword.value for keyword in node.keywords))
+                ):
+                    violations.append(f"{source_path.relative_to(project_root)}:{node.lineno}")
+
+        self.assertEqual(
+            violations,
+            [],
+            "Exception text in print/log calls must be token-redacted or limited to its class name: "
+            + ", ".join(violations),
+        )
+
     def test_main_remains_a_thin_compatibility_facade(self):
         main_lines = Path(main.__file__).read_text(encoding="utf-8").splitlines()
 

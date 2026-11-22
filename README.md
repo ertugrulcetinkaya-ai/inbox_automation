@@ -285,7 +285,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - Mac Mini için bu depodaki `scripts/deploy_mac_mini.sh` kullanılır. Varsayılan mod sırasıyla `git pull --ff-only`, `.venv/bin/python -m pip install -r requirements.lock`, kalite kontrolleri ve Gmail ön kontrolünü çalıştırır; ardından plist'leri önizler. Gmail ön kontrolü ortak üretim kilidini varsayılan olarak en fazla 120 saniye bekler; kilidi alamazsa `75` koduyla çıkar ve üretim işi çalıştığını bildirir. Plist yazma ve launchd `bootout`/`bootstrap` işlemleri yalnızca `--apply` verildiğinde yapılır.
 - `--apply`, her launchd label'ı için `bootout` sonrasında `launchctl print` başarısız olana dek en çok 30 saniye bekler; ardından `bootstrap` işlemini üç kez dener ve başarısız denemelerin hata metnini yazar. `DEPLOY_WAIT_STEP_SECONDS` bekleme adımını saniye cinsinden ayarlar (varsayılan `1`); bootstrap denemeleri arasındaki bekleme bunun üç katıdır. Sentetik deploy testlerinde `DEPLOY_WAIT_STEP_SECONDS=0` beklemeleri atlar.
 - Deploy ön kontrolü `.venv/bin/python` ve `python -m pip` işleyişini doğrular; bozuk venv için elle yeniden oluşturma komutunu bildirir ve venv'i otomatik değiştirmez. `ruff` ve `pyright`, yalnızca kendi `--version` kontrolleri başarılıysa kullanılır.
-- Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz.
+- Digest logları mesaj sayısı ve kaynak adını gösterebilir; mailbox adresi veya mesaj içeriği loglanmaz. İstisna loglarında hata metni yerine sınıf adı kullanılır; Gmail API tanılama kayıtları yalnızca HTTP status/reason veya ağ istisnası türünü içerir.
 
 ## Test
 

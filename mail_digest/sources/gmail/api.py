@@ -22,7 +22,10 @@ RATE_LIMIT_MAX_ATTEMPTS = 6
 
 
 class GmailApiError(RuntimeError):
-    pass
+    def __init__(self, message, *, http_status=None, reason=None):
+        super().__init__(message)
+        self.http_status = http_status
+        self.reason = reason
 
 
 class GmailNotFound(GmailApiError):
@@ -167,7 +170,11 @@ class GmailApi:
                 rate_limited = self._is_rate_limit_http(exc)
                 max_attempts = RATE_LIMIT_MAX_ATTEMPTS if rate_limited else self.max_attempts
                 if not self._is_retryable_http(exc) or attempt + 1 >= max_attempts:
-                    raise GmailApiError(self._http_error_message(exc)) from exc
+                    raise GmailApiError(
+                        self._http_error_message(exc),
+                        http_status=status,
+                        reason=self._google_reason(exc),
+                    ) from exc
                 if rate_limited:
                     delay = self._rate_limit_delay_for_errors([exc], attempt)
                 else:

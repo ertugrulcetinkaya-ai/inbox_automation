@@ -258,7 +258,7 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
 
     @patch("mail_digest.delivery.telegram.requests.post")
     @patch("mail_digest.delivery.telegram.load_env")
-    def test_network_error_redacts_bot_token(self, load_env, post):
+    def test_network_error_logs_exception_class_without_bot_token(self, load_env, post):
         token = self.env["TELEGRAM_BOT_TOKEN"]
         load_env.return_value = self.env
         post.side_effect = RuntimeError(f"request failed for bot{token}/sendMessage")
@@ -268,7 +268,7 @@ class TelegramDeliveryFailureTests(unittest.TestCase):
             self.assertFalse(send_telegram("test"))
 
         self.assertNotIn(token, output.getvalue())
-        self.assertIn("[REDACTED]", output.getvalue())
+        self.assertIn("RuntimeError", output.getvalue())
 
     @patch("mail_digest.delivery.telegram.time.sleep")
     @patch("mail_digest.delivery.telegram.requests.post")

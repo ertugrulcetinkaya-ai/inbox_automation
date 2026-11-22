@@ -381,7 +381,7 @@ def main():
             processed_update_ids, update_attempts = _load_listener_state(state_file)
         except TelegramUpdateStateError as exc:
             print(
-                f"Fatal error in listener: {str(exc).replace(token, '[REDACTED]')}",
+                f"Fatal error in listener ({exc.__class__.__name__})",
                 flush=True,
             )
             return 1
@@ -425,8 +425,7 @@ def main():
                     # durable id persistence have completed.
                     offset = max(offset, update_id + 1)
             except (TelegramUpdateStateError, TelegramConfigurationError) as exc:
-                safe_error = str(exc).replace(token, "[REDACTED]")
-                print(f"Fatal error in listener: {safe_error}", flush=True)
+                print(f"Fatal error in listener ({exc.__class__.__name__})", flush=True)
                 return 1
             except Exception as exc:
                 print(
@@ -437,8 +436,7 @@ def main():
                 poll_backoff = min(POLL_BACKOFF_MAX_SECONDS, poll_backoff * 2)
 
     except Exception as exc:
-        safe_error = str(exc).replace(token, "[REDACTED]") if token else str(exc)
-        print(f"Fatal error in listener: {safe_error}", flush=True)
+        print(f"Fatal error in listener ({exc.__class__.__name__})", flush=True)
         return 1
 
 if __name__ == "__main__":
