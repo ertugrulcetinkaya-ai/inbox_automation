@@ -213,7 +213,7 @@ class GmailApiTests(unittest.TestCase):
         service = Mock()
         service.users.return_value = users
         api = GmailApi(service)
-        query = "newer_than:367d filename:ics"
+        query = "newer_than:367d (filename:ics OR has:attachment)"
         self.assertEqual(list(api.iter_message_ids(query)), ["a"])
         messages_resource.list.assert_called_once_with(
             userId="me", labelIds=["INBOX"], q=query, maxResults=500
@@ -360,6 +360,46 @@ class GmailApiTests(unittest.TestCase):
 
         self.assertEqual(result, {"ok": True})
         self.assertEqual(sleeps, [9.0])
+
+    def test_retry_after_is_capped_by_environment_setting(self):
+        outcomes = [
+            http_error(429, headers={"Retry-After": "90"}),
+            {"ok": True},
+        ]
+        sleeps = []
+
+        with (
+            patch.dict(os.environ, {"GMAIL_RETRY_AFTER_MAX_SECONDS": "7"}),
+            patch("mail_digest.sources.gmail.api.random.uniform", return_value=0),
+        ):
+            result = GmailApi(None, sleep=sleeps.append)._execute(
+                lambda: Request(outcomes)
+            )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(sleeps, [7.0])
+
+    def test_rate_limit_wait_budget_stops_retries_before_exceeding_budget(self):
+        outcomes = [http_error(429, headers={"Retry-After": "60"})] * 6
+        sleeps = []
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GMAIL_RETRY_AFTER_MAX_SECONDS": "60",
+                    "GMAIL_RETRY_TOTAL_WAIT_SECONDS": "90",
+                },
+            ),
+            patch("mail_digest.sources.gmail.api.random.uniform", return_value=0),
+        ):
+            with self.assertRaises(GmailApiError) as raised:
+                GmailApi(None, sleep=sleeps.append)._execute(
+                    lambda: Request(outcomes)
+                )
+
+        self.assertEqual(sleeps, [60.0])
+        self.assertEqual(raised.exception.http_status, 429)
 
     def test_batch_nontransient_failure_raises(self):
         service = FakeBatchService({"unauthorized": [http_error(401)]})

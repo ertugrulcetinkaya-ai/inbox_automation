@@ -17,6 +17,8 @@ from ..config import (
     preflight_lock_wait_seconds,
     gmail_batch_pause_seconds,
     gmail_batch_size,
+    gmail_retry_after_max_seconds,
+    gmail_retry_total_wait_seconds,
     gmail_cache_file,
     gmail_token_file,
     local_now,
@@ -297,6 +299,8 @@ def build_status_report(now=None):
     for variable_name, read_setting in (
         ("GMAIL_BATCH_SIZE", gmail_batch_size),
         ("GMAIL_BATCH_PAUSE_SECONDS", gmail_batch_pause_seconds),
+        ("GMAIL_RETRY_AFTER_MAX_SECONDS", gmail_retry_after_max_seconds),
+        ("GMAIL_RETRY_TOTAL_WAIT_SECONDS", gmail_retry_total_wait_seconds),
         ("MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS", daily_lock_wait_seconds),
         ("MAIL_DIGEST_PREFLIGHT_LOCK_WAIT_SECONDS", preflight_lock_wait_seconds),
         ("MEETING_REMINDER_MINUTES", reminder_minutes),

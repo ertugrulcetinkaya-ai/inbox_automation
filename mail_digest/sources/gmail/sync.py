@@ -19,7 +19,10 @@ from .store import RETENTION_VERSION
 WINDOW_MS = 30 * 86400 * 1000
 CALENDAR_WINDOW_MS = 366 * 86400 * 1000
 RETENTION_UPGRADE_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000
-FULL_SYNC_QUERIES = ("newer_than:31d", "newer_than:367d filename:ics")
+FULL_SYNC_QUERIES = (
+    "newer_than:31d",
+    "newer_than:367d (filename:ics OR has:attachment)",
+)
 STAGE_BATCH_SIZE = 100
 
 
@@ -240,14 +243,30 @@ class GmailSynchronizer:
         except GmailHistoryExpired:
             self.full_sync()
             return
+        fetch_ids = [
+            message_id
+            for message_id, change_type in sorted(affected.items())
+            if change_type == "fetch"
+        ]
+        fetched_messages = (
+            self.api.get_messages_batch(fetch_ids, format="full") if fetch_ids else {}
+        )
         operations = []
         for message_id, change_type in sorted(affected.items()):
             if change_type == "delete":
                 operations.append(("delete", message_id))
             else:
-                operations.append(
-                    self._current_operation(message_id, cutoff_ms, calendar_cutoff_ms)
-                )
+                if message_id not in fetched_messages:
+                    raise GmailSyncError("Gmail batch response was incomplete")
+                message = fetched_messages[message_id]
+                if isinstance(message, GmailNotFound):
+                    operations.append(("delete", message_id))
+                else:
+                    operations.append(
+                        self._operation_for_message(
+                            message_id, message, cutoff_ms, calendar_cutoff_ms
+                        )
+                    )
         self.store.apply_incremental(
             operations, new_history_id, cutoff_ms, calendar_cutoff_ms
         )

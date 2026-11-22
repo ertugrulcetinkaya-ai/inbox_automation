@@ -330,3 +330,11 @@ def gmail_batch_size():
 
 def gmail_batch_pause_seconds():
     return _nonnegative_float_env("GMAIL_BATCH_PAUSE_SECONDS", 1.0)
+
+
+def gmail_retry_after_max_seconds():
+    return _nonnegative_float_env("GMAIL_RETRY_AFTER_MAX_SECONDS", 60.0)
+
+
+def gmail_retry_total_wait_seconds():
+    return _nonnegative_float_env("GMAIL_RETRY_TOTAL_WAIT_SECONDS", 300.0)

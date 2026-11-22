@@ -299,6 +299,24 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.sleeps, [1.0, 1.0])
         self.assertEqual(len(self.ids()), len(self.api.listed))
 
+    def test_full_sync_skips_sleep_when_batch_pause_is_zero(self):
+        self.api.listed = ["message-a", "message-b"]
+        self.api.messages = {
+            message_id: full_message(message_id) for message_id in self.api.listed
+        }
+
+        with patch.dict(
+            os.environ,
+            {"GMAIL_BATCH_SIZE": "1", "GMAIL_BATCH_PAUSE_SECONDS": "0"},
+        ):
+            self.sync.full_sync()
+
+        self.assertEqual(
+            self.api.batch_calls,
+            [(["message-a"], "full"), (["message-b"], "full")],
+        )
+        self.assertEqual(self.sleeps, [])
+
     def test_full_sync_marks_individual_not_found_batch_result_for_removal(self):
         self.api.listed = ["gone"]
         self.api.messages["gone"] = GmailNotFound("gone")
@@ -462,6 +480,23 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.ids(), [])
         self.assertEqual(self.store.checkpoint(), "91")
 
+    def test_incremental_sync_fetches_added_messages_in_one_batch(self):
+        self.api.messages.update({
+            "new-a": full_message("new-a"),
+            "new-b": full_message("new-b"),
+        })
+        self.api.history["90"] = [
+            history_page(
+                "91",
+                [event("messagesAdded", "new-a"), event("messagesAdded", "new-b")],
+            )
+        ]
+
+        self.sync.incremental_sync("90")
+
+        self.assertEqual(self.api.batch_calls, [(["new-a", "new-b"], "full")])
+        self.assertEqual(self.ids(), ["new-a", "new-b"])
+
     def test_deleted_message_is_removed_without_get_in_incremental_sync(self):
         self.seed_old()
         self.api.history["90"] = [
@@ -562,6 +597,41 @@ class GmailSyncTests(unittest.TestCase):
         self.assertEqual(self.api.list_queries, list(FULL_SYNC_QUERIES))
         self.assertEqual(digest.count, 1)
         self.assertIn("10:00", digest.message)
+
+    def test_full_sync_broad_attachment_query_drops_old_non_calendar_attachment(self):
+        ordinary_attachment = full_message(
+            "attachment-40d", age_ms=40 * 86400 * 1000
+        )
+        ordinary_attachment["payload"] = {
+            "mimeType": "multipart/mixed",
+            "filename": "",
+            "headers": ordinary_attachment["payload"]["headers"],
+            "parts": [
+                {
+                    "mimeType": "text/plain",
+                    "filename": "",
+                    "body": {"data": encoded("ordinary attachment notice")},
+                },
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "report.pdf",
+                    "body": {"data": encoded("synthetic attachment")},
+                },
+            ],
+        }
+        self.api.listed_by_query = {
+            FULL_SYNC_QUERIES[0]: [],
+            FULL_SYNC_QUERIES[1]: ["attachment-40d"],
+        }
+        self.api.messages["attachment-40d"] = ordinary_attachment
+
+        self.sync.full_sync()
+
+        self.assertEqual(
+            FULL_SYNC_QUERIES[1],
+            "newer_than:367d (filename:ics OR has:attachment)",
+        )
+        self.assertEqual(self.ids(), [])
 
     def test_incremental_sync_keeps_40_day_calendar_invite_and_today_occurrence(self):
         self.api.messages["calendar-40d"] = self._forty_day_calendar()

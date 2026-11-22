@@ -16,7 +16,12 @@ import httplib2
 from google.auth.exceptions import TransportError
 from googleapiclient.errors import HttpError
 
-from ...config import gmail_batch_pause_seconds, gmail_batch_size
+from ...config import (
+    gmail_batch_pause_seconds,
+    gmail_batch_size,
+    gmail_retry_after_max_seconds,
+    gmail_retry_total_wait_seconds,
+)
 
 RATE_LIMIT_MAX_ATTEMPTS = 6
 
@@ -110,7 +115,7 @@ class GmailApi:
         if value is None:
             return None
         try:
-            return max(0.0, float(value))
+            seconds = max(0.0, float(value))
         except ValueError:
             try:
                 retry_at = parsedate_to_datetime(value)
@@ -118,7 +123,11 @@ class GmailApi:
                 return None
             if retry_at.tzinfo is None:
                 retry_at = retry_at.replace(tzinfo=timezone.utc)
-            return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+            seconds = max(
+                0.0,
+                (retry_at - datetime.now(timezone.utc)).total_seconds(),
+            )
+        return min(seconds, gmail_retry_after_max_seconds())
 
     @staticmethod
     def _is_rate_limit_http(exc):
@@ -157,6 +166,7 @@ class GmailApi:
         return delay
 
     def _execute(self, request_factory, not_found="error"):
+        total_rate_limit_wait = 0.0
         for attempt in range(max(self.max_attempts, RATE_LIMIT_MAX_ATTEMPTS)):
             try:
                 return request_factory().execute()
@@ -177,6 +187,14 @@ class GmailApi:
                     ) from exc
                 if rate_limited:
                     delay = self._rate_limit_delay_for_errors([exc], attempt)
+                    wait_budget = gmail_retry_total_wait_seconds()
+                    if total_rate_limit_wait + delay > wait_budget:
+                        raise GmailApiError(
+                            "Gmail API rate-limit wait budget exhausted",
+                            http_status=status,
+                            reason=self._google_reason(exc),
+                        ) from exc
+                    total_rate_limit_wait += delay
                 else:
                     delay = min(4.0, 0.25 * (2 ** attempt)) + random.uniform(0, 0.1)
             except (OSError, socket.timeout, TransportError, httplib2.HttpLib2Error) as exc:
@@ -216,6 +234,7 @@ class GmailApi:
         results = {}
         pending = list(group)
         batch_size = max(1, len(group))
+        total_rate_limit_wait = 0.0
         for attempt in range(RATE_LIMIT_MAX_ATTEMPTS):
             rate_limited = []
             rate_limit_errors = []
@@ -260,8 +279,21 @@ class GmailApi:
                 return results
             last_error = rate_limit_errors[-1]
             if attempt + 1 >= RATE_LIMIT_MAX_ATTEMPTS:
-                raise GmailApiError(self._http_error_message(last_error)) from last_error
-            self.sleep(self._rate_limit_delay_for_errors(rate_limit_errors, attempt))
+                raise GmailApiError(
+                    self._http_error_message(last_error),
+                    http_status=self._status(last_error),
+                    reason=self._google_reason(last_error),
+                ) from last_error
+            delay = self._rate_limit_delay_for_errors(rate_limit_errors, attempt)
+            wait_budget = gmail_retry_total_wait_seconds()
+            if total_rate_limit_wait + delay > wait_budget:
+                raise GmailApiError(
+                    "Gmail API rate-limit wait budget exhausted",
+                    http_status=self._status(last_error),
+                    reason=self._google_reason(last_error),
+                ) from last_error
+            total_rate_limit_wait += delay
+            self.sleep(delay)
             pending = rate_limited
             batch_size = max(1, batch_size // 2)
         raise GmailApiError("Gmail batch retry budget exhausted")
