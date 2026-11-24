@@ -15,7 +15,6 @@ from unittest.mock import Mock, patch
 from mail_digest.commands import MEETING_COMMANDS, meeting_help_text
 from mail_digest.config import PROJECT_ROOT
 from mail_digest.delivery.commands import CommandWorker
-from mail_digest.integrations.company_reporting import REPORT_SERVICE_UNAVAILABLE
 from mail_digest.services.log_rotation import LISTENER_LOG_NAMES
 from telegram_listener import (
     DONE,
@@ -24,6 +23,7 @@ from telegram_listener import (
     RETRY,
     TelegramConfigurationError,
     TelegramUpdateStateError,
+    UNKNOWN_COMMAND_MESSAGE,
     _listener_conflict_backoff_seconds,
     _load_listener_state,
     _load_processed_update_ids,
@@ -118,93 +118,45 @@ class TelegramListenerCommandTests(unittest.TestCase):
 
         run_digest.assert_called_once_with(mode="weekly")
 
-    def test_help_starts_with_table_generated_meeting_aliases_then_report_help(self):
-        with patch(
-            "telegram_listener._run_company_report_command",
-            return_value={"response": "Rapor komutları"},
-        ) as report, patch("telegram_listener.send_text") as send:
+    def test_help_lists_only_table_generated_meeting_aliases(self):
+        with patch("telegram_listener.send_text") as send:
             process_update(self.update(40, "/help"), "token", "fixture-chat")
 
-        report.assert_called_once_with("/help", send=False)
         send.assert_called_once()
         sent_text = send.call_args.args[2]
-        self.assertTrue(sent_text.startswith("Toplantı komutları:\n"))
+        self.assertEqual(sent_text, meeting_help_text())
         for alias in MEETING_COMMANDS:
             self.assertIn(alias, sent_text)
-        self.assertLess(sent_text.index("Toplantı komutları:"), sent_text.index("Rapor komutları"))
-        self.assertEqual(meeting_help_text().splitlines()[0], "Toplantı komutları:")
 
-    def test_help_includes_optional_service_unavailable_response(self):
-        with patch(
-            "telegram_listener._run_company_report_command",
-            return_value=REPORT_SERVICE_UNAVAILABLE,
-        ), patch("telegram_listener.send_text") as send:
-            process_update(self.update(41, "/komutlar"), "token", "fixture-chat")
+    def test_report_commands_are_no_longer_served_by_this_bot(self):
+        with patch("telegram_listener.send_text", return_value=True) as send, patch(
+            "telegram_listener._run_digest_for_command"
+        ) as digest:
+            for update_id, text in enumerate(
+                ["/servis", "/fatura son 30 gün", "/session", "/session_hazirla", "/stok"],
+                start=50,
+            ):
+                self.assertEqual(
+                    process_update(self.update(update_id, text), "token", "fixture-chat"),
+                    DONE,
+                )
 
-        self.assertIn(REPORT_SERVICE_UNAVAILABLE, send.call_args.args[2])
+        digest.assert_not_called()
+        self.assertEqual(send.call_count, 5)
+        for call in send.call_args_list:
+            self.assertEqual(call.args[2], UNKNOWN_COMMAND_MESSAGE)
 
-    def test_company_command_and_session_routes_use_lazy_integration_helpers(self):
-        with patch(
-            "telegram_listener._run_company_report_command",
-            return_value=REPORT_SERVICE_UNAVAILABLE,
-        ) as report, patch(
-            "telegram_listener._run_report_session_status",
-            return_value="session status",
-        ) as session, patch(
-            "telegram_listener._run_prepare_report_session",
-            return_value="session prepared",
-        ) as prepare, patch("telegram_listener.send_text") as send:
-            process_update(self.update(50, "/servis"), "token", "fixture-chat")
-            process_update(self.update(51, "/session"), "token", "fixture-chat")
-            process_update(self.update(52, "/session_hazirla"), "token", "fixture-chat")
-
-        report.assert_called_once_with("/servis", send=True)
-        session.assert_called_once_with()
-        prepare.assert_called_once_with()
-        self.assertEqual(send.call_count, 4)
-        self.assertEqual(send.call_args_list[-2].args[2], "SYS oturumu hazırlanıyor. MFA tamamlayın.")
-        self.assertEqual(send.call_args_list[-1].args[2], "session prepared")
-
-    def test_plain_service_text_is_not_routed_but_slash_command_with_args_is(self):
-        with patch(
-            "telegram_listener._run_company_report_command",
-            return_value={
-                "ok": True,
-                "response": None,
-                "matched": True,
-                "suppress_reply": True,
-            },
-        ) as report, patch(
-            "telegram_listener._is_registered_company_report_command",
-            return_value=False,
-        ), patch("telegram_listener.send_text") as send:
+    def test_plain_text_is_ignored(self):
+        with patch("telegram_listener.send_text") as send:
             process_update(self.update(53, "servis"), "token", "fixture-chat")
-            process_update(
-                self.update(54, "/servis@ExampleBot son 30 gün"),
-                "token",
-                "fixture-chat",
-            )
 
-        report.assert_called_once_with("/servis son 30 gün", send=True)
         send.assert_not_called()
 
-    def test_registered_report_command_is_routed_from_the_worker_registry(self):
-        with patch(
-            "telegram_listener._is_registered_company_report_command",
-            return_value=True,
-        ) as is_registered, patch(
-            "telegram_listener._run_company_report_command",
-            return_value={
-                "ok": True,
-                "response": None,
-                "matched": True,
-                "suppress_reply": True,
-            },
-        ) as report:
-            process_update(self.update(55, "/stok son 30 gün"), "token", "fixture-chat")
+    def test_unknown_command_reply_is_retried_when_delivery_fails(self):
+        with patch("telegram_listener.send_text", return_value=False):
+            result = process_update(self.update(54, "/servis"), "token", "fixture-chat")
 
-        is_registered.assert_called_once_with("/stok son 30 gün")
-        report.assert_called_once_with("/stok son 30 gün", send=True)
+        self.assertEqual(result, RETRY)
 
     def test_status_command_uses_network_free_report(self):
         with patch(
@@ -418,42 +370,6 @@ class TelegramListenerCommandTests(unittest.TestCase):
         self.assertEqual(second, DONE)
         digest.assert_called_once_with(upcoming=False, wait_seconds=30)
         send.assert_called_once()
-
-    def test_company_report_exception_is_terminal_after_dispatch_starts(self):
-        update = self.update(73, "/servis")
-        output = StringIO()
-        with tempfile.TemporaryDirectory() as directory, patch(
-            "telegram_listener._run_company_report_command",
-            side_effect=RuntimeError("private report payload"),
-        ) as report, patch("telegram_listener.send_text", return_value=True) as send, redirect_stdout(
-            output
-        ):
-            state_file = Path(directory) / "state.json"
-            processed = set()
-            attempts = {}
-            first = process_update(
-                update,
-                "token",
-                "fixture-chat",
-                processed_update_ids=processed,
-                state_file=state_file,
-                update_attempts=attempts,
-            )
-            second = process_update(
-                update,
-                "token",
-                "fixture-chat",
-                processed_update_ids=processed,
-                state_file=state_file,
-                update_attempts=attempts,
-            )
-
-        self.assertEqual(first, FAILED)
-        self.assertEqual(second, DONE)
-        report.assert_called_once_with("/servis", send=True)
-        send.assert_called_once()
-        self.assertIn("RuntimeError", output.getvalue())
-        self.assertNotIn("private report payload", output.getvalue())
 
     def test_long_digest_worker_does_not_block_status_or_duplicate_queueing(self):
         worker = CommandWorker()

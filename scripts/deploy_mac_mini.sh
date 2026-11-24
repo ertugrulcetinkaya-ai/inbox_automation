@@ -113,12 +113,10 @@ if [[ "$PREFLIGHT_STATUS" -ne 0 ]]; then
     exit 1
 fi
 
-if ! LAUNCHD_JOBS="$(launchctl list)"; then
-    printf 'Unable to inspect launchd jobs; refusing deployment.\n' >&2
-    exit 1
-fi
-if grep -qi hermes <<<"$LAUNCHD_JOBS"; then
-    printf 'Hermes gateway hâlâ yüklü; önce company_reporting_hub tarafında durdurun.\n' >&2
+# Telegram allows a single poller per bot. Hermes keeps polling the reporting
+# bot, so this listener must run on its own bot; refuse a shared token.
+if ! "$VENV_PYTHON" scripts/check_bot_token_isolation.py; then
+    printf 'Telegram bot ayrımı doğrulanamadı; deploy durduruldu.\n' >&2
     exit 1
 fi
 
