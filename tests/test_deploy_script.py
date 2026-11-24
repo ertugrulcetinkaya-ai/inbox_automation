@@ -33,6 +33,7 @@ class DeployScriptTests(unittest.TestCase):
         broken_pip_shebang=False,
         python_check_failure="",
         quality_tools_fail=False,
+        token_shared=False,
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -159,6 +160,7 @@ fi
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == import && \"$*\" == '-c import sys' ]]; then exit 1; fi\n"
             "if [[ \"$DEPLOY_TEST_PYTHON_CHECK_FAILURE\" == pip && \"$*\" == '-m pip --version' ]]; then exit 1; fi\n"
             "if [[ \"$DEPLOY_TEST_TARGET_CONFIG_OK\" == false && \"$*\" == '-c from mail_digest.config import target_email; target_email()' ]]; then exit 1; fi\n"
+            "if [[ \"$DEPLOY_TEST_TOKEN_SHARED\" == true && \"$*\" == scripts/check_bot_token_isolation.py ]]; then echo shared-token >&2; exit 1; fi\n"
             "if [[ \"$*\" == 'main.py --upcoming --dry-run' ]]; then\n"
             "  printf '%s\\n' \"${MAIL_DIGEST_LOCK_FILE:-}\" > \"$DEPLOY_TEST_PYTHON_LOG.preflight_lock\"\n"
             "  printf '%s\\n' \"$DEPLOY_TEST_PREFLIGHT_OUTPUT\"\n"
@@ -211,6 +213,7 @@ fi
                 "DEPLOY_WAIT_STEP_SECONDS": "0",
                 "DEPLOY_TEST_PYTHON_CHECK_FAILURE": python_check_failure,
                 "DEPLOY_TEST_QUALITY_VERSION_FAIL": "true" if quality_tools_fail else "false",
+                "DEPLOY_TEST_TOKEN_SHARED": "true" if token_shared else "false",
                 "DEPLOY_TEST_GIT_LOG": str(git_log),
                 "DEPLOY_TEST_LAUNCHCTL_LOG": str(launchctl_log),
                 "DEPLOY_TEST_PYTHON_LOG": str(python_log),
@@ -237,13 +240,21 @@ fi
         self.assertIn("requires the main branch", result.stderr)
         self.assertFalse(python_log.exists())
 
-    def test_hermes_job_blocks_listener_deploy(self):
-        result, _, python_log = self.run_deploy(launchd_output="com.example.hermes.gateway")
+    def test_shared_bot_token_blocks_listener_deploy(self):
+        result, _, python_log = self.run_deploy(token_shared=True)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Hermes gateway hâlâ yüklü", result.stderr)
+        self.assertIn("Telegram bot ayrımı doğrulanamadı", result.stderr)
         calls = python_log.read_text(encoding="utf-8") if python_log.exists() else ""
+        self.assertIn("scripts/check_bot_token_isolation.py", calls)
         self.assertNotIn("scripts/install_launchd.py", calls)
+
+    def test_running_hermes_no_longer_blocks_deploy_on_separate_bots(self):
+        result, _, python_log = self.run_deploy(launchd_output="com.example.hermes.gateway")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = python_log.read_text(encoding="utf-8")
+        self.assertIn("scripts/install_launchd.py", calls)
 
     def test_preview_never_calls_launchctl_bootstrap(self):
         result, launchctl_log, python_log = self.run_deploy(

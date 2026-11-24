@@ -52,10 +52,10 @@ Bağımsız `telegram_listener.py`, bu bot için tek polling ve komut sahibidir.
 
 ### Diğer komutlar
 
-- `/help` ve `/komutlar`, önce yukarıdaki toplantı komutlarını gösterir; isteğe bağlı rapor paketi bulunuyorsa `send=False` ile rapor yardımını da ekler.
+- `/help` ve `/komutlar` yalnızca yukarıdaki toplantı komutlarını listeler.
 - `/durum` ve `/status`, her digest modunun son başarı/başarısızlık zamanını, seçili mail kaynağını, hedef hesabın yapılandırılma durumunu (adres göstermeden), Gmail token dosyasının izin ve süre bilgisini, salt-okunur cache yaşını/kayıt sayısını ve son hatırlatma taramasını gösterir. Hedef hesap yapılandırılmamışsa uyarı verir.
-- `/servis`, `/fatura` ve isteğe bağlı rapor paketindeki kayıtlı slash komutları rapor yönlendirmesine alınır; düz `servis`/`fatura` metinleri yok sayılır. `/session`, `/sys_session` ve `/session_hazirla` yalnızca aynı Python ortamında isteğe bağlı Company Reporting paketi kuruluysa çalışır. Paket yoksa tanınan servis komutuna `Rapor servisi bu ortamda hazır değil; toplantı komutları yine kullanılabilir.` yanıtı verilir.
-- Telegram komut adı ilk sözcükten ayrıştırılır; `/hafta@BotAdi argüman` gibi mesajlarda bot eki ve argümanlar alias eşleşmesini bozmaz. Digest ve rapor işleri tek worker kuyruğunda sırayla çalışırken polling devam eder; `/durum` ve yardım komutları doğrudan yanıtlanır. Aynı digest/rapor işi bekliyor veya çalışıyorsa ikinci kopya `Bu komut zaten sırada.` yanıtını alır. Kuyruğa alınan update, iş worker'a açılmadan önce kalıcı update state dosyasına yazılır.
+- Bu bot yalnızca toplantı komutlarını yanıtlar. Rapor komutları (`/servis`, `/fatura`, `/session` vb.) company_reporting_hub'ın ayrı botunda (Hermes) çalışır; buraya yazılırsa `Bu bot yalnızca toplantı komutlarını yanıtlar. Komut listesi için /komutlar yazın.` yanıtı verilir. Düz metinler yok sayılır.
+- Telegram komut adı ilk sözcükten ayrıştırılır; `/hafta@BotAdi argüman` gibi mesajlarda bot eki ve argümanlar alias eşleşmesini bozmaz. Digest işleri tek worker kuyruğunda sırayla çalışırken polling devam eder; `/durum` ve yardım komutları doğrudan yanıtlanır. Aynı digest işi bekliyor veya çalışıyorsa ikinci kopya `Bu komut zaten sırada.` yanıtını alır. Kuyruğa alınan update, iş worker'a açılmadan önce kalıcı update state dosyasına yazılır.
 
 Rapor yalnızca yerel dosyaları okur; OAuth token'ını yenilemez. `main.py --status --dry-run` raporu terminale yazar; `main.py --status` Telegram'a gönderir. Her gerçek (dry-run olmayan) `run_digest()` çağrısı mod başına zamanları varsayılan `~/.hermes_local_automation/mail_digest/status.json` dosyasına atomik ve `0600` izinle kaydeder; dry-run bu dosyayı değiştirmez. Yolu `MAIL_DIGEST_STATUS_FILE` ile değiştirebilirsiniz. Durum kaydı yazılamazsa yalnızca hata sınıfı loglanır ve digest devam eder.
 
@@ -157,8 +157,14 @@ TELEGRAM_ALLOWED_USER_ID=your_user_id
 ```
 
 Listener, configured group veya supergroup için `TELEGRAM_ALLOWED_USER_ID` yoksa
-komutları fail-closed reddeder. Böylece gruptaki başka bir üye, özellikle
-Company Reporting komutlarını yanlışlıkla çalıştıramaz.
+komutları fail-closed reddeder. Böylece gruptaki başka bir üye komut çalıştıramaz.
+
+Bu dosyadaki bot, company_reporting_hub'ın (Hermes) kullandığı bottan **farklı**
+olmalıdır: Telegram bir botu aynı anda yalnızca tek bir sürecin dinlemesine izin verir.
+Yeni botu BotFather'da `/newbot` ile oluşturun. Deploy betiği token'ı
+`~/.config/company_reporting_hub/telegram.env`, `~/.hermes/.env` ve
+`OTHER_TELEGRAM_ENV_FILES` ile verilen dosyalardakilerle karşılaştırır; aynıysa durur.
+Token değeri hiçbir çıktıya yazılmaz.
 
 Bu dosya yalnızca sahibi tarafından okunabilir olmalıdır:
 
@@ -278,7 +284,7 @@ Rollback gerektiğinde production job'larını açıkça `MAIL_SOURCE=apple_mail
 - GitHub `main` dalı kanonik kaynaktır.
 - Mac Studio ve MacBook Pro geliştirme içindir.
 - Mac Mini tek runtime/production makinesidir.
-- `telegram_listener.py`, bu botun tek Telegram polling ve komut sahibidir. Aynı token için başka bir polling süreci veya webhook çalıştırmayın; deploy betiği launchd içinde Hermes işi görürse durur.
+- `telegram_listener.py`, bu projenin kendi botunun tek Telegram polling ve komut sahibidir. Hermes, company_reporting_hub'ın ayrı botunu dinler; iki proje aynı token'ı kullanmaz. Deploy betiği `scripts/check_bot_token_isolation.py` ile token'ların ayrı olduğunu doğrular, aynıysa durur.
 - 08:00 summary plist'i `main.py --scheduled` çağırır ve ortak kilidi varsayılan 300 saniyeye kadar `MAIL_DIGEST_DAILY_LOCK_WAIT_SECONDS` ayarıyla bekler. Kilit yine doluysa `status.json` içinde `daily_scheduled` için `skipped_lock` sonucu kaydedilir ve süreç `75` koduyla çıkar. Telegram komutları `daily` anahtarını kullanır; manuel başarı planlı özetin durumunu gizlemez. `/durum`, `MAIL_DIGEST_DAILY_DEADLINE` varsayılan saati olan 08:15'ten önce kaydı olmayan planlı özeti `bekleniyor` gösterir; bu saatten sonra başarı yoksa, kilit nedeniyle atlandıysa veya hata aldıysa nedeni ile uyarır. `/tmp/mail_unread_digest.lock` dosyası yalnızca kilit buluşma noktasıdır; gerçek kilit `fcntl.flock()` ile tutulur ve process kapanınca kernel tarafından bırakılır. Diğer CLI çağrıları varsayılan olarak hemen döner; bağımsız Telegram listener aynı kilidi 30 saniyeye kadar 0,5 saniyelik aralıklarla bekler. Dosyanın diskte kalması stale-lock oluşturmaz.
 - CLI logları digest kilidi alındıktan sonra ve yalnızca çalışan modun loglarından seçilerek döndürülür; listener kendi loglarını başlangıçta ve en fazla saatte bir boyut eşiği için kontrol eder. İki süreç diğerinin loglarına dokunmaz. Rotasyon aktif dosyayı yerinde truncate eder; açık `O_APPEND` tanıtıcısından gelen sonraki yazılar etkin dosyada kalır. Dosya sistemi hataları digest akışını durdurmaz. Listener launchd işi `ThrottleInterval=30` ile çökme döngülerini sınırlar.
 - Üç launchd plist şablonu `PYTHONUNBUFFERED=1` ayarlar; ayrıca listener'daki her `print()` `flush=True` kullanır. Başlangıç, komut ve hata çıktıları böylece tamponda beklemeden launchd loglarına yazılır.
@@ -302,7 +308,7 @@ Telegram'da `/durum` yanıtını kontrol edin. `~/.hermes_local_automation/mail_
 
 ### Telegram 409
 
-409, aynı bot token'ı için başka bir polling süreci veya webhook bulunduğunu gösterir. Yalnızca tek bir poller çalıştırın; mevcut runtime sahibinin servis listesini inceleyip yinelenen işi kendi bakım prosedürüyle kapatın. Deploy betiğinin bilinen Hermes launchd korumasını kaldırmayın.
+409, aynı bot token'ı için başka bir polling süreci veya webhook bulunduğunu gösterir. Yalnızca tek bir poller çalıştırın. En olası neden bu projenin token'ının rapor botuyla (Hermes) aynı olmasıdır: `.venv/bin/python scripts/check_bot_token_isolation.py` ile kontrol edin, gerekirse BotFather'dan ayrı bir bot oluşturun.
 
 ### Bozuk Gmail veya parse cache'i
 
